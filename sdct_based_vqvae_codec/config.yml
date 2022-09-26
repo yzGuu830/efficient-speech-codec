@@ -1,0 +1,62 @@
+# # control  ######
+# control:
+#   loss_mode: 'base'
+#   num_clients: '100'
+#   active_rate: '0.1'
+#   data_split_mode: 'iid'
+#   local_epoch: '5'
+#   gm: '0'
+# data
+data_name: LIBRISPEECH
+# data_name: MNIST
+# data_name: CIFAR10
+model_name: vqvae
+# experiment
+num_workers: 0
+init_seed: 0
+num_experiments: 1
+log_interval: 0.25
+device: cuda
+world_size: 1
+resume_mode: 0
+verbose: False
+pivot_metric: PESQ
+
+# # data
+# data_name: LIBRISPEECH
+# batch_size:
+#   train: 128
+#   test: 128
+# shuffle:
+#   train: True
+#   test: False
+# num_workers: 0
+# model_name: vqvae
+# metric_name:
+#   train:
+#     - Loss
+#   test:
+#     - Loss
+# # optimizer
+# optimizer_name: Adam
+# lr: 3.0e-4
+# momentum: 0
+# weight_decay: 0
+# # scheduler
+# scheduler_name: ReduceLROnPlateau
+# step_size: 1
+# milestones:
+#   - 100
+#   - 150
+# patience: 10
+# threshold: 1.0e-4
+# factor: 0.5
+# min_lr: 1.0e-5
+# # experiment
+# init_seed: 0
+# num_experiments: 1
+# num_epochs: 300
+# log_interval: 0.25
+# device: cpu
+# world_size: 1
+# resume_mode: 0
