@@ -1,5 +1,6 @@
-
-
+from models.autoencoder import CSVQ_Encoder, CSVQ_Decoder
+from utils import to_device
+import torch
 # if __name__ == '__main__':
 
 #     encoder = CSVQ_Encoder()
@@ -19,5 +20,22 @@
 #     print(recon.shape, vq_loss)
 
 if __name__ == '__main__':
-    import torchaudio
-    print(torchaudio.__version__)
+    encoder = CSVQ_Encoder()
+    decoder = CSVQ_Decoder()
+
+    encoder = encoder.cuda()
+    decoder = decoder.cuda()
+
+    T, F = 600, 201
+    X = torch.randn(4,2,F,T, device='cuda')
+
+    hs, out = encoder(X)
+
+    for i in hs:
+        print(i.shape)
+    print(out.shape)
+
+
+    recon_feat, vq_loss = decoder(hs, out, target_Bs=6)
+
+    print(recon_feat.shape)

@@ -77,71 +77,81 @@ class CausalConvTranspose2d(nn.ConvTranspose2d):
         x = super(CausalConvTranspose2d, self).forward(x)
         return x
 
-
-
-class TCM_ResBlock(nn.Module):
-    '''
-    Dilated temporal convolution module (TCM) 
-    '''
-    def __init__(self, C=32, F=3, C_up_rate=2, dilation_rate=1):
+class F_downsample(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=(2,1)):
         super().__init__()
-        self.ch = C*F
-        self.C_up = self.ch * C_up_rate
-                
-        self.d_conv = nn.Conv1d(self.C_up, self.C_up, 3, padding=dilation_rate, dilation=dilation_rate, groups=self.C_up)
-                
-        self.up_channel_conv = nn.Conv1d(self.ch, self.C_up, 1, 1)
-        self.down_channel_conv = nn.Conv1d(self.C_up, self.ch, 1, 1)
-
-        self.act = nn.ReLU(inplace=True)
         
-        self.up_norm = nn.BatchNorm1d(self.C_up)
-        self.down_norm = nn.BatchNorm1d(self.ch)
+        self.down = CausalConv2d(in_channels=in_channels, out_channels=out_channels, 
+                                kernel_size=(5,3), stride=stride, padding=(2,1), 
+                                mask_type='B', data_channels=in_channels)
 
+        self.norm = nn.BatchNorm2d(out_channels)
+        self.act = nn.ReLU(inplace=True)
 
     def forward(self,x):
-        "x_shape: B, C, F, T"
-        # print("x_shape: ", x.shape)
-        x_ = torch.reshape(x,(x.size(0),-1,x.size(3))) # (B, C*F, T)
-        assert x_.size(1) == self.ch
+        "x_shape: B, C=2, F, T"
+        x = self.down(x)
+        x = self.norm(x)
+        x = self.act(x)
+        "x_shape: B, C=2, F//2, T"
 
-        x_ = self.up_channel_conv(x_) # (B, C_up, T)
-        x_ = self.up_norm(self.act(x_))
+        return x
 
-        # print("up_x: ", x_.shape)
-        filter_x = self.d_conv(x_) # (B, C_up, T)^
-        # print("filter_x: ", filter_x.shape)
-
-        filter_x = self.down_channel_conv(filter_x) # (B, C*F, T)^
-        filter_x = self.down_norm(self.act(filter_x))
-
-        # print("down_x: ", filter_x.shape)
-
-        filter_x  = torch.reshape(filter_x, x.size()) # (B, C, F, T)
-
-        return filter_x + x # residual
-
-class TCM_Module(nn.Module):
-    def __init__(self, C=32, F=3, C_up_rate=2, res_block=6, gru_layers=2):
+class F_upsample(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=(2,1), output_pad=(0,0)):
         super().__init__()
 
-        TCM_Block = [TCM_ResBlock(C, F, C_up_rate, dilation_rate=2**i) for i in range(res_block)]
-        self.TCM_Block = nn.Sequential(*TCM_Block)
+        self.up = CausalConvTranspose2d(in_channels=in_channels, out_channels=out_channels, 
+                                kernel_size=(5,3), stride=stride, padding=(2,1), output_padding=output_pad,
+                                mask_type='B', data_channels=in_channels)
 
-        self.num_gru_layers = gru_layers
-        self.ch = C*F
+        self.norm = nn.BatchNorm2d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self,x):
+        "x_shape: B, C=2, F//2, T"
+        x = self.up(x)
+        x = self.norm(x)
+        x = self.act(x)
+        "x_shape: B, C=2, F, T"
         
-        self.rnn = nn.GRU(input_size=self.ch,hidden_size=self.ch,num_layers=self.num_gru_layers,batch_first=True)
+        return x
+
+
+class TCM(nn.Module):
+    """An implementation of TCM Module in TCNN: Temporal convolutional neural network for real-time speech enhancement in the time domain"""
+
+    def __init__(self, in_channels, fix_channels, dilations=(1,2,4,8)):
+        super().__init__()
+
+        self.block = nn.Sequential(*[TCNN_ResBlock(in_channels, fix_channels, d) for d in dilations])
 
     def forward(self, x):
-        "x_shape: B, C, F, T"
-        x = self.TCM_Block(x)
 
-        x_ = torch.reshape(x, (x.size(0),x.size(3),-1)) # (B, T, C*F)
+        return self.block(x)
+    
 
-        h_0 = torch.randn(self.num_gru_layers,x.size(0),self.ch, device=cfg['device'])
-        x_, h_0 = self.rnn(x_, h_0) # (B, T, C*F)
+class TCNN_ResBlock(nn.Module):
+    '''
+    One Dilated Residual Block of TCNN
+    '''
+    def __init__(self, in_channels, fix_channels, dilation, filter_size=5):
+        super().__init__()
 
-        x_ = torch.reshape(x_,x.size())
+        self.block = nn.Sequential(*[
+            nn.Conv1d(in_channels, fix_channels, 1, 1),
+            nn.PReLU(num_parameters=1),
+            nn.BatchNorm1d(fix_channels),
 
-        return x_
+            nn.Conv1d(fix_channels, fix_channels, kernel_size=filter_size, stride=1, padding=(filter_size-1)*dilation//2,    # Depthwise Convolution 
+                                   dilation=dilation, groups=fix_channels, bias=False),
+
+            nn.PReLU(num_parameters=1),
+            nn.BatchNorm1d(fix_channels),
+            nn.Conv1d(fix_channels, in_channels, 1, 1)
+        ])
+        
+    def forward(self, x):
+
+        return self.block(x) + x # residual
+

@@ -112,7 +112,7 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
         # Sample n from 1 - N (allow scalability)
         n = torch.randint(1,len(cfg[cfg['model_name']]['ch_mult']) + 1,(1,1)).item()
 
-        output = model(input, Bs=n)
+        output = model(input, Bs=n, train=True)
         output['loss'].backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
@@ -154,7 +154,7 @@ def test_csvqcodec(data_loader, model, metric, logger, epoch, save_image=cfg['sa
             input = collate(input)
             input = to_device(input, cfg['device'])
 
-            output = model(input, Bs=None)   #fix the highest bitrate for test inference
+            output = model(input, Bs=None, train=False)   #fix the highest bitrate for test inference
 
             if i == 2: 
                 plot_batch['raw_feat'] = input['stft_feat'][:4]

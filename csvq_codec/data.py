@@ -7,8 +7,8 @@ from torch.utils.data.dataloader import default_collate
 
 from dataset import utils
 from dataset.librispeech import LIBRISPEECH
+from dataset.dnsv5 import DNSV5
 
-import os
 
 
 def fetch_dataset(data_name):
@@ -25,19 +25,31 @@ def fetch_dataset(data_name):
         dataset['test'].transform = utils.Compose([ 
                                                     utils.Standardize(stats=cfg['stats'][data_name])
                                                     ])
+    elif data_name in ['DNS_CHALLENGE']:
+        dataset['train'] = eval('{}(root=root, split=\'train\')'.format('DNSV5'))
+        dataset['test'] = eval('{}(root=root, split=\'test\')'.format('DNSV5'))
+        # dataset['train'].transform = utils.Compose([ 
+        #                                             utils.Standardize(stats=cfg['stats'][data_name])
+        #                                             ])                                          
+        # dataset['test'].transform = utils.Compose([ 
+        #                                             utils.Standardize(stats=cfg['stats'][data_name])
+        #                                             ])
+
     else:
         raise ValueError('Not valid dataset name')
     print('data ready')
     return dataset
 
 def input_collate(batch):
-    # print('before_collate: ', len(batch))
     if isinstance(batch[0], dict):
         output = {key: [] for key in batch[0].keys()}  # output = {'audio':[.....], 'feature':[.....]}
         for b in batch:
             for key in b:
                 output[key].append(b[key])
-        # print('after_collate: ', output['audio'].shape)
+
+        for key in output:
+            output[key] = torch.stack(output[key],dim=0)
+
         return output
     else:
         return default_collate(batch)
@@ -59,26 +71,20 @@ def make_data_loader(dataset, tag, batch_size=None, shuffle=None, sampler=None):
 
 
 
-
-
-
 if __name__ == '__main__':
-    spklist = os.listdir('/hpc/group/tarokhlab/yg172/data/LIBRISPEECH_SMALL/raw/train-clean-100/train-clean-100/') \
-    + os.listdir('/hpc/group/tarokhlab/yg172/data/LIBRISPEECH_SMALL/raw/test-clean/test-clean/')
     
-    print("num_of_speakers:{}".format(len(spklist)))
-
-    from utils import process_dataset, process_control, collate, to_device, plot_spectrogram, check_exists, makedir_exist_ok
-    from models import autoencoder
-    from metrics.metrics import Metric
+    # from utils import process_dataset
+    # from models import autoencoder
+    # from metrics.metrics import Metric
 
     cfg['seed'] = 0
     dataset = fetch_dataset(cfg['data_name'])
-    process_dataset(dataset)
+    # process_dataset(dataset)
 
     data_loader = make_data_loader(dataset, cfg['model_name'])
     print(data_loader)
     print(len(data_loader['train']),len(data_loader['test']))
+
 
     # model = autoencoder.init_model()
     # model = model.cuda()
@@ -86,8 +92,13 @@ if __name__ == '__main__':
     # metric = Metric({'train': ['Loss','RECON_Loss','CODEBOOK_Loss','MEL_Loss'], 
     #                  'test': ['Loss','MEL_Loss','audio_PSNR','PESQ']})
 
-    # for i, input in enumerate(data_loader['train']):
-    #     print(input['stft_feat'].shape)
+    for i, input in enumerate(data_loader['train']):
+        print(input['stft_feat'].shape)
+        break
+    
+    for i, input in enumerate(data_loader['test']):
+        print(input['stft_feat'].shape)
+        break
     #     input = to_device(input,'cuda')
     #     # print(input.keys())
         

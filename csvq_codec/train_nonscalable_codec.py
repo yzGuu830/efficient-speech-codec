@@ -4,16 +4,18 @@ import time
 import os
 import shutil
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
-from utils import save, to_device, process_dataset, make_optimizer, make_scheduler, collate, \
+from utils import save, to_device, process_dataset, make_optimizer, make_scheduler, \
                 resume, check_exists, makedir_exist_ok, plot_spectrogram
 from config import cfg, process_args
 
 from data import fetch_dataset, make_data_loader
-from models import autoencoder
+from models.autoencoder import init_model
 from metrics.metrics import Metric
 from logger import make_logger
 import math
+from tqdm import tqdm
 
 cudnn.benchmark = True
 parser = argparse.ArgumentParser(description='cfg')
@@ -23,11 +25,11 @@ parser.add_argument('--control_name', default=None, type=str)
 args = vars(parser.parse_args())
 process_args(args)
 
-os.environ['CUDA_VISIBLE_DEVICES'] = str(cfg['cuda_device'])
+os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1, 2, 3'
 
 def main():
     for i in range(cfg['num_experiments']):
-        bitrate = cfg['fixed_bitstream'] * cfg[cfg['model_name']]['Groups'] * math.log2(cfg[cfg['model_name']]['codebook_size']) * 50
+        bitrate = cfg['fixed_bitstream'] * cfg[cfg['model_name']]['num_groups'] * math.log2(cfg[cfg['model_name']]['codebook_size']) * 50
         cfg['model_tag'] = '0_{}_csvqcodec_nonscalable_{}kbps'.format(cfg['data_name'],bitrate*0.001)
         print('Experiment: {}'.format(cfg['model_tag']))
         runExperiment()
@@ -45,14 +47,13 @@ def runExperiment():
     print(f"train_data:{len(data_loader['train'])} test_data:{len(data_loader['test'])}")
 
     # load_model
-    model = autoencoder.init_model()
+    model = nn.DataParallel(init_model())
     model = model.cuda()
-
     optimizer = make_optimizer(model, cfg['model_name'])
     scheduler = make_scheduler(optimizer, cfg['model_name'])
 
     metric = Metric({'train': ['Loss','RECON_Loss','CODEBOOK_Loss','MEL_Loss'], 
-                     'test': ['Loss','MEL_Loss','audio_PSNR','PESQ']})
+                     'test': ['audio_PSNR','PESQ']})
 
     print("model, optimizer, scheduler, metric loading finish!")
 
@@ -70,7 +71,6 @@ def runExperiment():
     else:
         last_epoch = 1
         logger = make_logger('/scratch/yg172/output/runs/train_{}'.format(cfg['model_tag']))
-
     
     print("Start Training")
     for epoch in range(last_epoch, cfg[cfg['model_name']]['num_epochs'] + 1):
@@ -102,15 +102,14 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
     start_time = time.time()
     for i, input in enumerate(data_loader):
         input_size = len(input['stft_feat'])
-        input = collate(input)
         input = to_device(input, cfg['device'])
 
         # Train
         optimizer.zero_grad()
         
-        output = model(input, Bs=cfg['fixed_bitstream'])
-        output['loss'].backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+        output = model(input, train=True, target_Bs=cfg['fixed_bitstream'])
+        output['loss'].mean().backward()
+        
         optimizer.step()
 
         # Evaluation
@@ -126,6 +125,7 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
                              'Train Epoch: {}({:.0f}%)'.format(epoch, 100. * i / len(data_loader)),
                              'Learning rate: {:.8f}'.format(lr), 'Epoch Finished Time: {}'.format(epoch_finished_time),
                              'Experiment Finished Time: {}'.format(exp_finished_time)]}
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             logger.append(info, 'train', mean=False)
             print(logger.write('train', metric.metric_name['train']))
 
@@ -135,8 +135,7 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
             img_path = os.path.join(root_path, f"train_epoch_{epoch}_batch_{i}.jpg")
             with torch.no_grad():
                 evaluation = metric.evaluate(metric.metric_name['test'], input, output)
-                plot_spectrogram(input['stft_feat'][:4],output['recon_feat'][:4],img_path,evaluation,
-                                                                Bs=cfg['fixed_bitstream'])
+                plot_spectrogram(input['stft_feat'][:4],output['recon_feat'][:4],img_path,evaluation, Bs=cfg['fixed_bitstream'])
             model.train(True)
     logger.safe(False)
     return
@@ -146,12 +145,11 @@ def test_csvqcodec(data_loader, model, metric, logger, epoch, save_image=cfg['sa
     with torch.no_grad():
         model.train(False)
         plot_batch = {}
-        for i, input in enumerate(data_loader):
+        for i, input in tqdm(enumerate(data_loader)):
             input_size = len(input['stft_feat'])
-            input = collate(input)
             input = to_device(input, cfg['device'])
 
-            output = model(input, Bs=cfg['fixed_bitstream'])   #fix the highest bitrate for test inference
+            output = model(input, train=False, target_Bs=cfg['fixed_bitstream'])   #fix the highest bitrate for test inference
 
             if i == 2: 
                 plot_batch['raw_feat'] = input['stft_feat'][:4]
@@ -168,8 +166,7 @@ def test_csvqcodec(data_loader, model, metric, logger, epoch, save_image=cfg['sa
             img_path = os.path.join(root_path, f"test_epoch_{epoch}.jpg")
             evaluation = metric.evaluate(metric.metric_name['test'], input, output)
 
-            plot_spectrogram(plot_batch['raw_feat'],plot_batch['recon_feat'],img_path,evaluation, 
-                                                            Bs=cfg['fixed_bitstream'])
+            plot_spectrogram(plot_batch['raw_feat'],plot_batch['recon_feat'],img_path,evaluation,Bs=cfg['fixed_bitstream'])
     logger.safe(False)
     return
 

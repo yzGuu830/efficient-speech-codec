@@ -84,7 +84,7 @@ class Metric(object):
         self.metric_name = self.make_metric_name(metric_name)
         self.pivot, self.pivot_name, self.pivot_direction = self.make_pivot()
         self.metric = {
-                       'Loss': (lambda input, output: output['loss'].item()),
+                       'Loss': (lambda input, output: output['loss'].mean().item()),
                     #    'Perplexity': (lambda input, output: output['ppl'].item()),
                        'audio_MSE':  (lambda input, output: audio_MSE(output['recon_audio'], input['audio'])),
                        'audio_MAE':  (lambda input, output: audio_MAE(output['recon_audio'], input['audio'])),
@@ -92,16 +92,16 @@ class Metric(object):
                        'img_MSE': (lambda input, output: img_MSE(output['recon_feat'], input['stft_feature'])),
                        'img_PSNR': (lambda input, output: img_PSNR(output['recon_feat'], input['stft_feature'])),
                        'PESQ': (lambda input, output: PESQ(output['recon_audio'], input['audio'])),   # pesq ranges from -0.5 to 4.5
-                       'RECON_Loss': (lambda input, output: output['recon_loss'].item()),
-                       'CODEBOOK_Loss': (lambda input, output: output['vq_loss'].item()),
-                       'MEL_Loss': (lambda input, output: output['mel_loss'].item()),
+                       'RECON_Loss': (lambda input, output: output['recon_loss'].mean().item()),
+                       'CODEBOOK_Loss': (lambda input, output: output['vq_loss'].mean().item()),
+                       'MEL_Loss': (lambda input, output: output['mel_loss'].mean().item()),
                        }
         
     def make_metric_name(self, metric_name):
         return metric_name
 
     def make_pivot(self):
-        if cfg['data_name'] in ['LIBRISPEECH','LIBRISPEECH_SMALL']:
+        if cfg['data_name'] in ['LIBRISPEECH','LIBRISPEECH_SMALL', 'DNS_CHALLENGE']:
             pivot = -float('inf')
             pivot_direction = 'up'
             pivot_name = 'PESQ'
