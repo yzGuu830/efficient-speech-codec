@@ -13,6 +13,8 @@ class Group_Quantize(nn.Module):
         self.num_groups = num_groups
 
         self.quantizer = nn.ModuleList([EMAQuantizer(self.K, codebook_size, vq_commit) for _ in range(self.num_groups)])
+
+        self.mode = "train"
             
     def forward(self, z):
         '''
@@ -24,19 +26,27 @@ class Group_Quantize(nn.Module):
         z = torch.reshape(z, (z.size(0), z.size(1)*4, -1))                  # (N, 4*C_fix, T//4)
         assert z.size(1) == self.K * self.num_groups
 
-        q_merge, vq_loss = [], torch.tensor(0.0, device=cfg['device'])
+        if self.mode == "train":
+            for vqvae in self.quantizer:
+                vqvae.training = True 
+        elif self.mode == "test":
+            for vqvae in self.quantizer:
+                vqvae.training = False
+        else:
+            raise ValueError('Not valid EMA mode')
+
+        q_merge, vq_loss = [], torch.zeros(z.size(0), device=cfg['device']) # torch.tensor(0.0, device=cfg['device'])
         
         # quantize feature part by part
         for i in range(self.num_groups):
-            q_i, vq_loss, _, ppl = self.quantizer[i](z[:,self.K*i:self.K*(i+1),:])
+            q_i, vq_loss_g, _, ppl = self.quantizer[i](z[:,self.K*i:self.K*(i+1),:])
             q_merge.append(q_i)
+            vq_loss += vq_loss_g
 
         q_merge = torch.cat(q_merge,dim=1)                                  # (N, 4*C_fix, T//4)
         q_merge = torch.reshape(q_merge,(z.size(0),z.size(1)//4,-1))        # (N, C_fix, T)
 
-        return q_merge, vq_loss
-
-
+        return q_merge, vq_loss/self.num_groups #[bs, loss]
 
 class Quantizer(nn.Module):
     """An implementation of VQ-VAE Quantizer in https://arxiv.org/abs/1711.00937"""
@@ -118,7 +128,9 @@ class EMAQuantizer(nn.Module):
             embedding_normalized = self.embedding_mean / cluster_size.unsqueeze(0)
             self.embedding.data.copy_(embedding_normalized)
             
-        diff = self.vq_commit * F.mse_loss(quantize.detach(), input)
+        diff = self.vq_commit * F.mse_loss(quantize.detach(), input, reduction='none').mean(dim=[1,2])
+
+        # diff = self.vq_commit * F.mse_loss(quantize, input.detach())
 
         avg_probs = torch.mean(embedding_onehot,dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))

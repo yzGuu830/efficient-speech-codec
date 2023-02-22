@@ -77,6 +77,8 @@ if __name__ == '__main__':
     # from models import autoencoder
     # from metrics.metrics import Metric
 
+    cfg['data_name'] = 'LIBRISPEECH'
+
     cfg['seed'] = 0
     dataset = fetch_dataset(cfg['data_name'])
     # process_dataset(dataset)

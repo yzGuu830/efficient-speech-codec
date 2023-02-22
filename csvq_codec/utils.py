@@ -246,6 +246,7 @@ class Stats(object):
 
 import seaborn as sns
 import matplotlib.pyplot as plt
+import torchaudio 
 def plot_spectrogram(raw_feat, recon_feat, path, evaluation, Bs):
     '''
     raw_feat: batchsize*feats  (4*F*T*2)
@@ -277,6 +278,42 @@ def plot_spectrogram(raw_feat, recon_feat, path, evaluation, Bs):
         ax[1][i].set_title(f"recon_feat{i}") 
         ax[1][i].set_ylabel("Frequency(Hz):0-{}".format(f_domain))
         sns.heatmap(recon_amp[i].numpy(),ax = ax[1][i], cmap="mako", yticklabels=False).invert_yaxis()
+
+    plt.show()
+    fig.savefig(path, dpi=500, bbox_inches='tight', pad_inches=0)
+
+
+def plot_mel(raw_audio, recon_audio, path, evaluation, Bs):
+    '''
+    Plot Log Mel-Spectrogram
+    raw_feat: batchsize*feats  (4*L)
+    recon_feat: batchsize*feats (4*L)
+    Bs: target bitstreams
+    '''
+
+    mel_trans = torchaudio.transforms.MelSpectrogram(n_fft=2048,win_length=2**7,n_mels=128)
+
+    if cfg['device'] == 'cuda': mel_trans = mel_trans.cuda()
+
+    raw_feat, recon_feat = mel_trans(raw_audio).log(), mel_trans(recon_audio).log()
+
+    fig, ax = plt.subplots(2, 4, figsize=(22, 10))
+
+    evaluation = {k:round(v,4) for k,v in evaluation.items()}
+    evaluation['Bitstreams'] = Bs
+    fig.suptitle(str(evaluation))
+
+    
+
+    for i in range(len(ax[0])):
+        ax[0][i].set_title(f"raw_feat_{i}")         
+
+        sns.heatmap(raw_feat[i].cpu().numpy(),ax = ax[0][i], cmap="mako", yticklabels=False).invert_yaxis()
+    
+    for i in range(len(ax[1])):
+        ax[1][i].set_title(f"recon_feat{i}") 
+        
+        sns.heatmap(recon_feat[i].cpu().numpy(),ax = ax[1][i], cmap="mako", yticklabels=False).invert_yaxis()
 
     plt.show()
     fig.savefig(path, dpi=500, bbox_inches='tight', pad_inches=0)

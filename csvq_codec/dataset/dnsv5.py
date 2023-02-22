@@ -10,6 +10,7 @@ from config import cfg
 
 class DNSV5(Dataset):
     data_name = 'DNS_CHALLENGE'
+    """https://github.com/microsoft/DNS-Challenge"""
 
     def __init__(self, root, split, transform=None) -> None:
         self.root = os.path.expanduser(root)

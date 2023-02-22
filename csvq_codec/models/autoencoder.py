@@ -43,9 +43,9 @@ class CSVQ_TFNet(nn.Module):
 
         return encoder_hs, encoder_out
     
-    def decode(self, encoder_hs, encoder_out, target_Bs):
+    def decode(self, encoder_hs, encoder_out, target_Bs, mode):
 
-        recon_feat, vq_loss = self.decoder(encoder_hs, encoder_out, target_Bs)
+        recon_feat, vq_loss = self.decoder(encoder_hs, encoder_out, target_Bs, mode)
 
         return recon_feat, vq_loss
 
@@ -59,18 +59,17 @@ class CSVQ_TFNet(nn.Module):
         raw_feat = input['stft_feat'].permute(0,3,1,2)
 
         encoder_hs, encoder_out = self.encode(raw_feat)
-        recon_feat, vq_loss = self.decode(encoder_hs, encoder_out, target_Bs)     # (N, 2, F, T) reconstruct feature
+        recon_feat, vq_loss = self.decode(encoder_hs, encoder_out, target_Bs, mode='train')     # (N, 2, F, T) reconstruct feature
         
         recon_feat_complex = feat2spec(recon_feat) # (N, F, T) reconstruct complex stft feature
         recon_audio = self.ift(recon_feat_complex) # (N, L)    reconstruct audio 
 
-        ## Calculate Loss 
-        # recon_feat = self.ft(self.ift(recon_feat_complex)) # (N, F, T) # To maintain stft consistency https://arxiv.org/pdf/1811.08521.pdf
-        # recon_feat = torch.view_as_real(recon_feat).permute(0,3,1,2) # (N, 2, F, T)
+        if cfg['csvq_codec']['stft_consist'] == 1:
+            recon_feat = self.ft(self.ift(recon_feat_complex)) # (N, F, T) # To maintain stft consistency https://arxiv.org/pdf/1811.08521.pdf
+            recon_feat = torch.view_as_real(recon_feat).permute(0,3,1,2) # (N, 2, F, T)
 
         if self.power_law != 1:
-            c_raw, c_recon = power_law_compress(input['audio'], power=self.power_law), power_law_compress(recon_audio, power=self.power_law)
-            recon_loss = self.recon_loss(torch.view_as_real(self.ft(c_raw)), torch.view_as_real(self.ft(c_recon)))
+            recon_loss = self.recon_loss(power_law_compress(raw_feat, power=self.power_law), power_law_compress(recon_feat, power=self.power_law))
         else:
             recon_loss = self.recon_loss(raw_feat, recon_feat)
 
@@ -91,7 +90,7 @@ class CSVQ_TFNet(nn.Module):
         raw_feat = input['stft_feat'].permute(0,3,1,2)
 
         encoder_hs, encoder_out = self.encode(raw_feat)
-        recon_feat, _ = self.decode(encoder_hs, encoder_out, target_Bs)
+        recon_feat, _ = self.decode(encoder_hs, encoder_out, target_Bs, mode='test')
 
         recon_audio = self.ift(feat2spec(recon_feat)) # reconstruct audio 
 
@@ -115,12 +114,12 @@ class CSVQ_Encoder(nn.Module):
         self.Bitstreams = len(ch_mult)
         in_ch_mult = (1,)+tuple(ch_mult)
         
-        self.conv_in = F_downsample(in_channels*in_ch_mult[0], in_channels*ch_mult[0], stride=(1,1))
+        self.conv_in = F_downsample(in_channels*in_ch_mult[0], in_channels*ch_mult[0], stride=(1,1),causal=cfg['csvq_codec']['causal'])
         self.down = nn.ModuleList()
 
         for i in range(1, self.Bitstreams):
             block_in, block_out = in_channels*in_ch_mult[i], in_channels*ch_mult[i]
-            self.down.append(F_downsample(block_in,block_out))
+            self.down.append(F_downsample(block_in,block_out,causal=cfg['csvq_codec']['causal']))
         
         self.temporal_filter = TCM(in_channels=cfg['f_dims'][-1]*ch_mult[-1]*in_channels,
                                     fix_channels=cfg['f_dims'][-1]*ch_mult[-1],
@@ -129,7 +128,7 @@ class CSVQ_Encoder(nn.Module):
         self.num_RNN_layers = num_RNN_layers
         self.RNN = nn.GRU(input_size=cfg['f_dims'][-1]*ch_mult[-1]*in_channels, 
                             hidden_size=cfg['f_dims'][-1]*ch_mult[-1]*in_channels, 
-                            num_layers=num_RNN_layers, batch_first=True)
+                            num_layers=num_RNN_layers, dropout=0, batch_first=True)
         
     def forward(self, input):
         """
@@ -144,14 +143,17 @@ class CSVQ_Encoder(nn.Module):
         for i in range(1, len(self.down)):
             hs.append(self.down[i](hs[-1]))
         
+        # encoder_out = fold(hs[-1])
+        
         encoder_out = self.temporal_filter(fold(hs[-1])) # (N, C, F, T) -> (N, C*F, T)
 
-        h_0 = torch.randn(self.num_RNN_layers, encoder_out.size(0), encoder_out.size(1), device=cfg['device'])
+        h_ = torch.randn(self.num_RNN_layers, encoder_out.size(0), encoder_out.size(1), device=cfg['device'])
+        self.RNN.flatten_parameters()
+        encoder_out, _ = self.RNN(encoder_out.permute(0,2,1), h_) # (N, T, C*F)
 
-        encoder_out, _ = self.RNN(encoder_out.permute(0,2,1), h_0) # (N, T, C*F)
+        encoder_out = encoder_out.permute(0,2,1)
 
-        return hs, encoder_out.permute(0,2,1)
-
+        return hs, encoder_out
 
 class CSVQ_Decoder(nn.Module):
     def __init__(self, in_channels=2, ch_mult=(8,8,12,12,16,32), num_groups=6, TCM_Dilation=(1,2,4,8), num_RNN_layers=4,
@@ -160,13 +162,13 @@ class CSVQ_Decoder(nn.Module):
         self.Bitstreams = len(ch_mult)
         out_ch_mult = (1,)+tuple(ch_mult)
 
-        self.conv_out = F_upsample(in_channels*ch_mult[0], in_channels*out_ch_mult[0],stride=(1,1))
+        self.conv_out = F_upsample(in_channels*ch_mult[0], in_channels*out_ch_mult[0],stride=(1,1),causal=cfg['csvq_codec']['causal'])
         self.up = nn.ModuleList()
         
         for i in reversed(range(1, self.Bitstreams)):
             block_in, block_out = in_channels*ch_mult[i], in_channels*out_ch_mult[i]
-            if i == self.Bitstreams-2: self.up.append(F_upsample(block_in,block_out,output_pad=(1,0)))
-            else: self.up.append(F_upsample(block_in,block_out))
+            if i == self.Bitstreams-2: self.up.append(F_upsample(block_in,block_out,output_pad=(1,0),causal=cfg['csvq_codec']['causal']))
+            else: self.up.append(F_upsample(block_in,block_out,causal=cfg['csvq_codec']['causal']))
 
         f_dims = cfg['f_dims']
 
@@ -184,7 +186,7 @@ class CSVQ_Decoder(nn.Module):
         self.num_RNN_layers = num_RNN_layers
         self.RNN = nn.GRU(input_size=cfg['f_dims'][-1]*ch_mult[-1]*in_channels, 
                             hidden_size=cfg['f_dims'][-1]*ch_mult[-1]*in_channels, 
-                            num_layers=num_RNN_layers, batch_first=True)
+                            num_layers=num_RNN_layers, dropout=0, batch_first=True)
 
         self.temporal_filter2 = TCM(in_channels=cfg['f_dims'][-1]*ch_mult[-1]*in_channels,
                                     fix_channels=cfg['f_dims'][-1]*ch_mult[-1],
@@ -193,7 +195,7 @@ class CSVQ_Decoder(nn.Module):
         self.fuse_vq_refine_module = nn.ModuleList([Fuse_VQ(num_groups=num_groups, input_channel=in_channels*ch_mult[self.Bitstreams-i-1], F_dim=f_dims[self.Bitstreams-i-1], 
                                     down_rate=down_rate, codebook_size=codebook_size, vq_commit=vq_commit) for i in range(self.Bitstreams-1)])
         
-    def forward(self, encoder_hs, encoder_out, target_Bs):
+    def forward(self, encoder_hs, encoder_out, target_Bs, mode='train'):
         ''' 
           encoder_hs:  [E5,E4,E3,E2,E1]
           encoder_out: [N, C*F, T]
@@ -202,6 +204,11 @@ class CSVQ_Decoder(nn.Module):
 
         if target_Bs is None: target_Bs = self.Bitstreams    # non-scalable
         assert target_Bs <= self.Bitstreams and target_Bs >= 1
+        
+        # Set EMA Quantizer mode
+        self.quantizer_0.mode = mode
+        for fuse in self.fuse_vq_refine_module:
+            fuse.quantizer.mode = mode    
 
         # Group Quantization for Q_0 (no fuse)  
         z_q0, vq_loss = self.quantizer_0(self.down_0(encoder_out))  # (N, C*F, T) -> (N, c_fix_0, T)
@@ -209,26 +216,27 @@ class CSVQ_Decoder(nn.Module):
 
         # Temporal Filtering Module
         z_q0 = self.temporal_filter1(z_q0)
+        self.RNN.flatten_parameters()
         h_0 = torch.randn(self.num_RNN_layers, z_q0.size(0), z_q0.size(1), device=cfg['device'])
         z_q0, _ = self.RNN(z_q0.permute(0,2,1), h_0)             
-        z_q0 = unfold(self.temporal_filter1(z_q0.permute(0,2,1)),cfg['csvq_codec']['ch_mult'][-1]*2)   # (N, C, F, T)
+        z_q0 = unfold(self.temporal_filter2(z_q0.permute(0,2,1)),cfg['csvq_codec']['ch_mult'][-1]*2)   # (N, C, F, T)
+        # z_q0 = unfold(z_q0,cfg['csvq_codec']['ch_mult'][-1]*2)
 
         # Stepwise Fuse-VQ Decoding
         F_dec = [z_q0]
 
         for i in range(self.Bitstreams-1): # i: 0 -> 4
             transmit = i < target_Bs-1
-
-            F_dec_refined, vq_loss_i = self.fuse_vq_refine_module[i](encoder_hs[-i-1], F_dec[i], transmit=transmit) 
+            
+            F_dec_refined, vq_loss_i = self.fuse_vq_refine_module[i](F_dec[i], encoder_hs[-i-1], transmit=transmit) 
             vq_loss += vq_loss_i
     
             z_qi = self.up[i](F_dec_refined)
             F_dec.append(z_qi)
-            # print(i, F_dec_refined.shape, self.up[i], z_qi.shape)
-
+            
         decoder_out = self.conv_out(F_dec[-1])
 
-        return decoder_out, vq_loss
+        return decoder_out, vq_loss/target_Bs
 
 
 def init_model():

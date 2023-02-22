@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from utils import save, to_device, process_dataset, make_optimizer, make_scheduler, \
-                resume, check_exists, makedir_exist_ok, plot_spectrogram
+                resume, check_exists, makedir_exist_ok, plot_spectrogram, plot_mel
 from config import cfg, process_args
 
 from data import fetch_dataset, make_data_loader
@@ -16,6 +16,8 @@ from metrics.metrics import Metric
 from logger import make_logger
 import math
 from tqdm import tqdm
+import numpy as np
+
 
 cudnn.benchmark = True
 parser = argparse.ArgumentParser(description='cfg')
@@ -25,12 +27,21 @@ parser.add_argument('--control_name', default=None, type=str)
 args = vars(parser.parse_args())
 process_args(args)
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1, 2, 3'
+if cfg['num_workers'] > 0:
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1, 2, 3'
+
+else:
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 
 def main():
     for i in range(cfg['num_experiments']):
         bitrate = cfg['fixed_bitstream'] * cfg[cfg['model_name']]['num_groups'] * math.log2(cfg[cfg['model_name']]['codebook_size']) * 50
-        cfg['model_tag'] = '0_{}_csvqcodec_nonscalable_{}kbps'.format(cfg['data_name'],bitrate*0.001)
+        
+        cfg['model_tag'] = '0_{}_csvqcodec_{}_{}kbps'.format(cfg['data_name'],cfg['model_mode'], bitrate*0.001)
+    
         print('Experiment: {}'.format(cfg['model_tag']))
         runExperiment()
     return
@@ -47,7 +58,10 @@ def runExperiment():
     print(f"train_data:{len(data_loader['train'])} test_data:{len(data_loader['test'])}")
 
     # load_model
-    model = nn.DataParallel(init_model())
+    model = init_model()
+    if cfg['num_workers'] > 0:
+        model = nn.DataParallel(model)
+        print("Use multiple GPUs Parallel Training")
     model = model.cuda()
     optimizer = make_optimizer(model, cfg['model_name'])
     scheduler = make_scheduler(optimizer, cfg['model_name'])
@@ -76,6 +90,7 @@ def runExperiment():
     for epoch in range(last_epoch, cfg[cfg['model_name']]['num_epochs'] + 1):
         train_csvqcodec(data_loader['train'], model, optimizer, metric, logger, epoch)
         print('Epoch {} Training Finish! Start to Test'.format(epoch))
+        
         test_csvqcodec(data_loader['test'], model, metric, logger, epoch)
 
         if cfg[cfg['model_name']]['scheduler_name'] == 'ReduceLROnPlateau':
@@ -107,8 +122,14 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
         # Train
         optimizer.zero_grad()
         
-        output = model(input, train=True, target_Bs=cfg['fixed_bitstream'])
-        output['loss'].mean().backward()
+        if cfg['model_mode'] == 'scalable':
+            N = np.random.randint(1,7)
+        else:
+            N = cfg['fixed_bitstream']
+        
+        output = model(**dict(input=input, train=True, target_Bs=N))
+
+        output['loss'].mean().backward() if cfg['num_workers'] > 0 else output['loss'].backward()
         
         optimizer.step()
 
@@ -125,9 +146,10 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
                              'Train Epoch: {}({:.0f}%)'.format(epoch, 100. * i / len(data_loader)),
                              'Learning rate: {:.8f}'.format(lr), 'Epoch Finished Time: {}'.format(epoch_finished_time),
                              'Experiment Finished Time: {}'.format(exp_finished_time)]}
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+            
             logger.append(info, 'train', mean=False)
             print(logger.write('train', metric.metric_name['train']))
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
 
         if save_image and i % int((len(data_loader) * cfg['plot_interval']) + 1) == 0:
             root_path = "/scratch/yg172/output/runs/train_{}".format(cfg['model_tag'])
@@ -135,38 +157,43 @@ def train_csvqcodec(data_loader, model, optimizer, metric, logger, epoch, save_i
             img_path = os.path.join(root_path, f"train_epoch_{epoch}_batch_{i}.jpg")
             with torch.no_grad():
                 evaluation = metric.evaluate(metric.metric_name['test'], input, output)
-                plot_spectrogram(input['stft_feat'][:4],output['recon_feat'][:4],img_path,evaluation, Bs=cfg['fixed_bitstream'])
+                plot_mel(input['audio'][:4],output['recon_audio'][:4],img_path,evaluation, Bs=N)
             model.train(True)
     logger.safe(False)
     return
 
 def test_csvqcodec(data_loader, model, metric, logger, epoch, save_image=cfg['save_image']):
     logger.safe(True)
+    if cfg['model_mode'] == 'scalable' and epoch > 50: bss = range(1,7)
+    else: bss = range(cfg['fixed_bitstream'], cfg['fixed_bitstream']+1)
     with torch.no_grad():
-        model.train(False)
-        plot_batch = {}
-        for i, input in tqdm(enumerate(data_loader)):
-            input_size = len(input['stft_feat'])
-            input = to_device(input, cfg['device'])
+        for bitstream in bss:
+            print(f"Test Performance at {bitstream*3}kbps:")
+            model.train(False)
+            plot_batch = {}
 
-            output = model(input, train=False, target_Bs=cfg['fixed_bitstream'])   #fix the highest bitrate for test inference
+            for i, input in tqdm(enumerate(data_loader)):
+                input_size = len(input['stft_feat'])
+                input = to_device(input, cfg['device'])
 
-            if i == 2: 
-                plot_batch['raw_feat'] = input['stft_feat'][:4]
-                plot_batch['recon_feat'] = output['recon_feat'][:4]
-            evaluation = metric.evaluate(metric.metric_name['test'], input, output)
-            logger.append(evaluation, 'test', input_size)
-        info = {'info': ['Model: {}'.format(cfg['model_tag']), 'Test Epoch: {}'.format(epoch)]}        
-        logger.append(info, 'test', mean=False)
-        print(logger.write('test', metric.metric_name['test']))
+                output = model(**dict(input=input, train=False, target_Bs=bitstream))   #fix the highest bitrate for test inference
+                if i == 2: 
+                    plot_batch['raw_feat'] = input['audio'][:4]
+                    plot_batch['recon_feat'] = output['recon_audio'][:4]
+                evaluation = metric.evaluate(metric.metric_name['test'], input, output)
+                logger.append(evaluation, 'test', input_size)
 
-        if save_image:
-            root_path = "/scratch/yg172/output/runs/train_{}".format(cfg['model_tag'])
-            if not check_exists(root_path): makedir_exist_ok(root_path)
-            img_path = os.path.join(root_path, f"test_epoch_{epoch}.jpg")
-            evaluation = metric.evaluate(metric.metric_name['test'], input, output)
+            info = {'info': ['Model: {}'.format(cfg['model_tag']), 'Test Epoch: {}'.format(epoch)]}        
+            logger.append(info, 'test', mean=False)
+            print(logger.write('test', metric.metric_name['test']))
 
-            plot_spectrogram(plot_batch['raw_feat'],plot_batch['recon_feat'],img_path,evaluation,Bs=cfg['fixed_bitstream'])
+            if save_image:
+                root_path = "/scratch/yg172/output/runs/train_{}".format(cfg['model_tag'])
+                if not check_exists(root_path): makedir_exist_ok(root_path)
+                img_path = os.path.join(root_path, f"test_epoch_{epoch}.jpg")
+                evaluation = metric.evaluate(metric.metric_name['test'], input, output)
+
+                plot_mel(plot_batch['raw_feat'],plot_batch['recon_feat'],img_path,evaluation,Bs=bitstream)
     logger.safe(False)
     return
 

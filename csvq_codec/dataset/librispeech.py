@@ -18,6 +18,8 @@ class LIBRISPEECH(Dataset):
         self.root = os.path.expanduser(root)
         self.split = split
         self.transform = transform
+        self.stft = torchaudio.transforms.Spectrogram(win_length=int(cfg['win_length']*cfg['sr']*1e-3),hop_length=int(cfg['hop_length']*cfg['sr']*1e-3),power=None)
+
         if not check_exists(self.processed_folder):
             self.process()
         self.dataset = load(os.path.join(self.processed_folder, '{}.pt'.format(self.split)), mode='torch')
@@ -29,9 +31,13 @@ class LIBRISPEECH(Dataset):
             return len(self.dataset)
 
     def __getitem__(self, idx): # return ith audio waveform data 
-        input = {'audio':self.dataset[0][idx], 'stft_feat':self.dataset[1][idx], 'speaker_id':self.dataset[2][idx]}
+        input = {'audio':self.dataset[0][idx], 'speaker_id':self.dataset[1][idx]}
+
+        input['stft_feat'] = torch.view_as_real(self.stft(input['audio'])) # [1, F, T, 2]
+
         if self.transform is not None:
             input['stft_feat'] = self.transform(input['stft_feat'])
+
         return input
 
     @property
@@ -46,10 +52,10 @@ class LIBRISPEECH(Dataset):
         if not check_exists(self.raw_folder):
             self.download()
         else: print("data downloaded")
-        train_data, train_feature, train_spk_ids, test_data, test_feature, test_spk_ids = self.make_data()
+        train_data, train_spk_ids, test_data, test_spk_ids = self.make_data()
 
-        save((train_data,train_feature,train_spk_ids), os.path.join(self.processed_folder, 'train.pt'), mode='torch')
-        save((test_data,test_feature,test_spk_ids), os.path.join(self.processed_folder, 'test.pt'), mode='torch')
+        save((train_data,train_spk_ids), os.path.join(self.processed_folder, 'train.pt'), mode='torch')
+        save((test_data,test_spk_ids), os.path.join(self.processed_folder, 'test.pt'), mode='torch')
         return
 
     def download(self):
@@ -79,13 +85,13 @@ class LIBRISPEECH(Dataset):
             # speaker id, speaker idx
             speaker_id_map[speaker_id[i]] = i
         
-        transf = make_plain_transform(win_len=cfg['win_length'],hop_len=cfg['hop_length'],sr=cfg['sr'])
+        # transf = make_plain_transform(win_len=cfg['win_length'],hop_len=cfg['hop_length'],sr=cfg['sr'])
 
         def batchify(audio_files, length, num_clips):
             print(f"Audio Length: {length} Number Clips: {num_clips}")
             c = torch.Tensor()
-            data, feat, ids = [], [], []
-            count = 0
+            data, ids = [], []
+            
             for f in tqdm(audio_files):
                 mapped_id = speaker_id_map[(f.split('/')[-1]).split('-')[0]]
                 wf, _ = torchaudio.load(f)
@@ -97,28 +103,23 @@ class LIBRISPEECH(Dataset):
 
                 while c.shape[1] > length:
                     audio = c[:,:length]
-                    stft_feat = transf(audio)
-                    if stft_feat.max().item() < 1e-5 or stft_feat.std().item() == 0:
-                        count+=1
-                        print('Useless Feature count: {} Useful Feature count: {}'.format(count,len(data)))
-                    else:
-                        data.append(audio)
-                        feat.append(stft_feat)
-                        ids.append(mapped_id)
+                    data.append(audio)
+                    ids.append(mapped_id)
                     c = c[:,length:]
 
                 c = torch.Tensor()
-            return torch.cat(data,dim=0), torch.cat(feat,dim=0), torch.tensor(ids).unsqueeze(1)
 
-        train_data, train_feature, train_spk_ids = batchify(train_audio_files, length=int((cfg['train_dur']-cfg['hop_length']*0.001)*cfg['sr']), num_clips=cfg['train_clips'])
+            return torch.cat(data,dim=0), torch.tensor(ids).unsqueeze(1)
+
+        train_data, train_spk_ids = batchify(train_audio_files, length=int((cfg['train_dur']-cfg['hop_length']*0.001)*cfg['sr']), num_clips=cfg['train_clips'])
         print("Train Batchify Finish")
-        test_data, test_feature, test_spk_ids = batchify(test_audio_files,length=int((cfg['test_dur']-cfg['hop_length']*0.001)*cfg['sr']), num_clips=cfg['test_clips'])
+        test_data, test_spk_ids = batchify(test_audio_files,length=int((cfg['test_dur']-cfg['hop_length']*0.001)*cfg['sr']), num_clips=cfg['test_clips'])
         print("Test Batchify Finish")
         
-        # train_size: 201*601 3s
-        # test_size: 201*2001 10s
+        # train_size: 201*600 3s
+        # test_size: 201*2000 10s
         
-        return train_data, train_feature, train_spk_ids, test_data, test_feature, test_spk_ids
+        return train_data, train_spk_ids, test_data, test_spk_ids
 
 
 class Complex2Real:

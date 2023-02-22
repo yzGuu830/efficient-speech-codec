@@ -2,7 +2,7 @@ import yaml
 
 global cfg
 if 'cfg' not in globals():
-    with open('/hpc/home/yg172/csvq_codec/config.yml', 'r') as f:
+    with open('/scratch/yg172/csvq_codec/config.yml', 'r') as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 

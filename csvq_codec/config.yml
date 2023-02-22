@@ -4,7 +4,7 @@ normalization: mean_var
 
 # model
 model_name: csvq_codec
-
+model_mode: scalable
 
 csvq_codec: 
   ch_mult: 
@@ -17,8 +17,8 @@ csvq_codec:
   down_rate: 0.4
   num_groups: 6
   power_law: 1
-  n_mels: 48
-  num_RNN_layers: 4
+  n_mels: 800
+  num_RNN_layers: 12
   TCM_Dilation:
   - 1
   - 2
@@ -26,12 +26,14 @@ csvq_codec:
   - 8
   codebook_size: 1024
   vq_commit: 1.0
+  stft_consist: 1
   mel_factor: 0.25
   vq_factor: 0.25
+  causal: True
 
   batch_size:
-    train: 72
-    test: 36
+    train: 40
+    test: 16
   shuffle:
     train: True
     test: False
@@ -39,13 +41,13 @@ csvq_codec:
   optimizer_name: Adam
   lr: 3.0e-4
   weight_decay: 0
-  betas: [0.5,0.9]
+  betas: [0.9,0.999]
   momentum: 0.9
   nesterov: True
 
   scheduler_name: ReduceLROnPlateau
-  factor: 0.85
-  patience: 1
+  factor: 0.95
+  patience: 2
   threshold: 1.0e-4
   min_lr: 1.0e-8
   
@@ -71,7 +73,7 @@ raw_F: 201
 train_T: 600
 
 # experiment
-num_workers: 0
+num_workers: 4
 init_seed: 0
 num_experiments: 1
 device: cuda
@@ -81,6 +83,7 @@ verbose: False
 pivot_metric: PESQ
 cuda_device: 0
 plot_interval: 0.5
+seed: 0
 
 sr: 16000
 win_length: 20
