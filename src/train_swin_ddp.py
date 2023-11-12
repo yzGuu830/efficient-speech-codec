@@ -42,8 +42,9 @@ def init_model(rank):
         "swin_heads": args.swin_heads, "window_size": args.window_size, "mlp_ratio": args.mlp_ratio,
         "in_freq": args.in_freq, "h_dims": args.swin_h_dims, "max_streams":args.max_streams, 
         "proj": args.proj, "overlap": args.overlap, "num_vqs": args.num_vqs, "codebook_size": args.codebook_size, 
+        "cosine_similarity": args.cosine_sim,
         "mel_nfft": args.mel_nfft, "mel_bins": args.mel_bins, 
-        "fuse_net": args.fuse_net, "shift_wa": args.shift_wa_fuse, "scalable": args.scalable, 
+        "fuse_net": args.fuse_net, "scalable": args.scalable, 
         "spec_augment": args.spec_augment, "win_len": args.win_len, "hop_len": args.hop_len, "sr": args.sr,
         "vis": rank == 0
         }
@@ -217,8 +218,38 @@ if __name__ == "__main__":
 """
 python train_swin_ddp.py \
     --max_streams 6 \
+    --swin_h_dims 45 45 72 96 192 384 \
+    --swin_heads 3 3 6 12 24 \
+    --proj 8 8 4 4 4 4 \
+    --overlap 4 \
+    --wb_exp_name swin-9k-scale-baseline \
+    --scalable \
+    --epochs 60 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 15 \
+    --test_bs_per_device 4 \
+    --num_device 4 \
+    --seed 830
+
+python train_swin_ddp.py \
+    --max_streams 6 \
+    --swin_h_dims 45 45 72 96 192 384 \
+    --swin_heads 3 3 6 12 24 \
+    --proj 16 16 16 16 16 16 \
+    --overlap 4 \
+    --wb_exp_name swin-9k-scale-vqimprove \
+    --cosine_sim \
+    --scalable \
+    --epochs 60 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 15 \
+    --test_bs_per_device 4 \
+    --num_device 4 \
+    --seed 830
+
+python train_swin_ddp.py \
+    --max_streams 6 \
     --overlap 2 \
-    --use_wb \
     --wb_project_name deep-audio-compress \
     --wb_exp_name swin-18k-scale-shifted-window-attn-fuse \
     --scalable \
@@ -234,7 +265,6 @@ python train_swin_ddp.py \
 python train_swin_ddp.py \
     --max_streams 6 \
     --overlap 2 \
-    --use_wb \
     --wb_project_name deep-audio-compress \
     --wb_exp_name swin-18k-scale-window-attn-fuse \
     --scalable \
@@ -249,7 +279,6 @@ python train_swin_ddp.py \
 python train_swin_ddp.py \
     --max_streams 6 \
     --overlap 2 \
-    --use_wb \
     --wb_project_name deep-audio-compress \
     --wb_exp_name swin-18k-scale-flatten-attn-fuse \
     --scalable \

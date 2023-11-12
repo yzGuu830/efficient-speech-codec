@@ -57,9 +57,10 @@ class BaseCodec(nn.Module):
         # self.recon_loss = TimeLoss()
         # self.mel_loss = FreqLoss(n_mels=64)
         
-    def init_quantizer(self, proj, overlap, num_vqs, codebook_size, vq_commit, patch_size=None):
+    def init_quantizer(self, proj, overlap, num_vqs, codebook_size, vq_commit, patch_size=None, cosine_similarity=False):
         quantizer = nn.ModuleList()
-        if isinstance(proj, int):
+        if len(proj) == 1:
+            proj = proj[0]
             proj = [proj for _ in range(self.max_streams)]
 
         if patch_size:
@@ -69,14 +70,14 @@ class BaseCodec(nn.Module):
         quantizer.append(
                 GroupVQ(
                     self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1), 
-                    proj[0], overlap, num_vqs, codebook_size, vq_commit
+                    proj[0], overlap, num_vqs, codebook_size, vq_commit, cosine_similarity,
                 )
             )
         for i in range(1, self.max_streams):
             quantizer.append(
                 GroupVQ(
                     self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i),
-                    proj[i], overlap, num_vqs, codebook_size, vq_commit
+                    proj[i], overlap, num_vqs, codebook_size, vq_commit, cosine_similarity,
                 )
             ) 
         self.max_bps = self.max_streams * math.log2(codebook_size) * num_vqs // 20
@@ -131,11 +132,11 @@ class SwinCrossScaleCodec(BaseCodec):
                  overlap: int = 4, 
                  num_vqs: int = 6, 
                  codebook_size: int = 1024, 
+                 cosine_similarity: bool = False,
                  mel_nfft: int = 2048, 
                  mel_bins: int = 64, 
                  vq_commit: float = 1., 
                  fuse_net: bool = False, 
-                 shift_wa: bool = False,
                  scalable: bool = False, 
                  spec_augment: bool = False, 
                  win_len: int = 20, 
@@ -151,9 +152,9 @@ class SwinCrossScaleCodec(BaseCodec):
         self.decoder = SwinCrossScaleDecoder(
             swin_depth, swin_heads, window_size, mlp_ratio,
             in_freq, patch_size, self.in_dim, self.dec_h_dims,
-            max_streams, fuse_net, shift_wa,
+            max_streams, fuse_net
         )
-        self.quantizer = self.init_quantizer(proj, overlap, num_vqs, codebook_size, vq_commit, patch_size)
+        self.quantizer = self.init_quantizer(proj, overlap, num_vqs, codebook_size, vq_commit, patch_size, cosine_similarity)
 
         if vis:
             self.vis_quantization()
@@ -413,14 +414,19 @@ class BaseCrossScaleDecoder(nn.Module):
             permute(0,3,1,2).reshape(B, freq*temp, C)
         return dec_refine
 
-    def csvq_layer(self, enc, dec, idx, vq, attn_fuse=False):
-        if self.fuse_net:
-            if not attn_fuse:
-                residual = self.pre_fuse(enc, dec, idx)
+    def csvq_layer(self, enc, dec, idx, vq):
+        if self.fuse_net is not None:
+            if self.fuse_net == "conv":
+                residual = self.conv_pre_fuse(enc, dec, idx)
                 residual_q, vq_loss = vq(residual)
-                dec_refine = self.post_fuse(residual_q, dec, idx)
-                
-            else:
+                dec_refine = self.conv_post_fuse(residual_q, dec, idx)
+            
+            elif self.fuse_net == "vanilla":
+                residual = self.attn_pre_fuse(enc, dec, idx)
+                residual_q, vq_loss = vq(residual)
+                dec_refine = self.attn_post_fuse(enc, dec, idx)
+
+            elif self.fuse_net in ["window", "shiftwindow"]:
                 residual = self.w_attn_pre_fuse(enc, dec, idx)
                 residual_q, vq_loss = vq(residual)
                 dec_refine = self.w_attn_post_fuse(enc, dec, idx)
@@ -452,7 +458,7 @@ class SwinEncoder(BaseEncoder):
 
         self.pre_swin = SwinTLayer(
                     self.in_h_dims[0], self.in_h_dims[0],
-                    depth=swin_depth, num_heads=swin_heads if isinstance(swin_heads, int) else swin_heads[0],
+                    depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
                     subsample=None
         )
@@ -478,7 +484,8 @@ class SwinEncoder(BaseEncoder):
     def init_encoder(self, depth, num_heads, window_size, mlp_ratio):
         blocks = nn.ModuleList()
 
-        if isinstance(num_heads, int):
+        if len(num_heads) == 1:
+            num_heads = num_heads[0]
             num_heads = [min(num_heads*2**i, num_heads*2**3) for i in range(len(self.h_dims))]
         for i in range(len(self.h_dims)):
             blocks.append(
@@ -505,8 +512,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                  in_dim: int = 2, 
                  h_dims: list = [128,64,32,32,16,16], 
                  max_streams: int = 6, 
-                 fuse_net: bool = False,
-                 shift_wa: bool = False) -> None:
+                 fuse_net: str = "vanilla",) -> None:
         super().__init__(in_freq//patch_size[0], in_dim, h_dims, max_streams, fuse_net)
 
         self.patch_deembed = PatchDeEmbed(in_freq, patch_size, in_dim, h_dims[-1])
@@ -514,19 +520,27 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         self.out_h_dims = self.out_h_dims[:-1]
         self.blocks = self.init_decoder(swin_depth, swin_heads, window_size, mlp_ratio)
 
-        if self.fuse_net:
-            print(f"Use Window Attn Fuse Merge Net for Swin Codec, Shifted: {shift_wa}")
-            # self.init_fuse_blocks(max_streams, h_dims, 
-            #                       f_dims=self.f_dims[1:],
-            #                       fuse_attn_heads=1)
-            self.init_w_attn_fuse_blocks(max_streams, h_dims=h_dims, f_dims=self.f_dims[1:], 
-                                        window_size=window_size*2, fuse_attn_heads=3, shift_wa=shift_wa)
+        if self.fuse_net is not None:
+            print(f"Apply Residual-Based Cross Attention Fusion Net for Swin Codec | Type: {self.fuse_net}")
+            if self.fuse_net == "vanilla":
+                self.init_attn_fuse_blocks(max_streams, h_dims, f_dims=self.f_dims[1:], fuse_attn_heads=1)
+
+            elif self.fuse_net == "window":
+                self.init_w_attn_fuse_blocks(max_streams, h_dims=h_dims, f_dims=self.f_dims[1:], 
+                                        window_size=window_size*2, fuse_attn_heads=3, shift_wa=False)
+                
+            elif self.fuse_net == "shiftwindow":
+                self.init_w_attn_fuse_blocks(max_streams, h_dims=h_dims, f_dims=self.f_dims[1:], 
+                                        window_size=window_size*2, fuse_attn_heads=3, shift_wa=True)    
+                
+            else:
+                raise ValueError("fuse_net method must be in [vanilla, window, shiftwindow]")        
         else:
-            print("Use Residual Fuse for Swin Codec")
+            print("Apply Vanilla Residual Fusion Net for Swin Codec")
         
         self.post_swin = SwinTLayer(
                     self.out_h_dims[-1], self.out_h_dims[-1],
-                    depth=swin_depth, num_heads=swin_heads if isinstance(swin_heads, int) else swin_heads[0],
+                    depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
                     subsample=None
         )
@@ -548,7 +562,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
             transmit = (i < streams-1)            
             if transmit:
                 dec_i_refine, vq_loss_i = self.csvq_layer(enc=enc_hs[-1-i], dec=dec_hs[i],
-                                                          idx=i, vq=vqs[i+1], attn_fuse=self.fuse_net)
+                                                          idx=i, vq=vqs[i+1])
                 vq_loss += vq_loss_i
             else:
                 dec_i_refine = dec_hs[i]
@@ -562,9 +576,10 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
 
     def init_decoder(self, depth, num_heads, window_size, mlp_ratio):
         blocks = nn.ModuleList()
-        if isinstance(num_heads, int):
+        if len(num_heads) == 1:
+            num_heads = num_heads[0]
             num_heads = [min(num_heads*2**(len(self.h_dims)-i-1), num_heads*2**3) for i in range(len(self.h_dims))]
-        elif isinstance(num_heads, list):
+        else:
             num_heads = num_heads[::-1]
             
         for i in range(len(self.h_dims)):
@@ -830,8 +845,7 @@ if __name__ == "__main__":
                                 overlap = 2, 
                                 num_vqs = 6, 
                                 codebook_size = 1024, 
-                                fuse_net=True,
-                                shift_wa=True,
+                                fuse_net="shiftwindow",
                                 )
     outputs = codec.train_one_step(x=torch.randn(1,47920),
                          x_feat=torch.randn(1,192,600,2),

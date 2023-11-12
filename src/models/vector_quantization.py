@@ -13,7 +13,8 @@ class GroupVQ(nn.Module):
                 overlap: int = 4,
                 num_vqs: int = 6, 
                 codebook_size: int = 1024, 
-                vq_commit: float = .25) -> None:
+                vq_commit: float = .25,
+                cosine_similarity: bool = False,) -> None:
         super().__init__()
         
         self.fix_dim = get_multiple(in_dim*H//proj, num_vqs) if proj > 1 else in_dim*H
@@ -31,7 +32,9 @@ class GroupVQ(nn.Module):
         self.vqs = nn.ModuleList([ VectorQuantization(
                                     self.vq_dims[i], codebook_size, vq_commit,
                                     ) 
-                                    for i in range(num_vqs)])        
+                                    for i in range(num_vqs)]) 
+        
+        self.cosine_similarity=cosine_similarity       
         
     def forward(self, z):
 
@@ -44,7 +47,7 @@ class GroupVQ(nn.Module):
             e_idx = s_idx + self.vq_dims[i]
             z_i = z_[:, :, s_idx:e_idx]
 
-            z_q_i, vq_loss_i = self.vqs[i](z_i)
+            z_q_i, vq_loss_i = self.vqs[i](z_i, self.cosine_similarity)
 
             z_q.append(z_q_i)
             vq_loss += vq_loss_i
@@ -122,7 +125,7 @@ class GroupVQ(nn.Module):
             e_idx = s_idx + self.vq_dims[i]
             z_i = z_[:, :, s_idx:e_idx]
 
-            code, _, _ = self.vqs[i].quantize(z_i)
+            code, _, _ = self.vqs[i].quantize(z_i, self.cosine_similarity)
             codes.append(code)
 
             s_idx = e_idx
@@ -157,12 +160,17 @@ class VectorQuantization(nn.Module):
         self.register_buffer('embedding_mean', embedding.clone())
         self.vq_commit = vq_commit
 
-    def quantize(self, z):
+    def quantize(self, z, cosine_similarity=False):
         """z: [*, C=embedding_size]"""
-        z_flat = z.view(-1, self.embedding_size)
+        if cosine_similarity:
+            codebook = F.normalize(self.embedding, dim=0) #[D, N]
+            z = F.normalize(z, dim=-1)
+        else:
+            codebook = self.embedding
 
+        z_flat = z.view(-1, self.embedding_size)
         dist = ( z_flat.pow(2).sum(1, keepdim=True)
-                - 2 * z_flat @ self.embedding
+                - 2 * z_flat @ codebook
                 + self.embedding.pow(2).sum(0, keepdim=True) )
 
         embed_idx = dist.min(1).indices
@@ -174,11 +182,11 @@ class VectorQuantization(nn.Module):
         quantize = F.embedding(code, self.embedding.transpose(0, 1))
         return quantize
 
-    def forward(self, z):
+    def forward(self, z, cosine_similarity=False):
         """ Forward Training
         z: [bs, ..., embedding_size]
         """
-        code, embed_idx, z_flat = self.quantize(z)
+        code, embed_idx, z_flat = self.quantize(z, cosine_similarity)
         z_q = self.dequantize(code)
 
         if self.training:

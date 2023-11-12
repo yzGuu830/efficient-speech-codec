@@ -65,4 +65,9 @@ if __name__ == "__main__":
 python evaluate_swin_perf.py \
     --model_path /scratch/eys9/output/swin-18k-scale-baseline \
     --data_path /scratch/eys9/data/DNS_CHALLENGE/processed_yz
+
+export CUDA_VISIBLE_DEVICES=1
+python evaluate_swin_perf.py \
+    --model_path /scratch/eys9/output/swin-18k-scale-flatten-attn-fuse \
+    --data_path /scratch/eys9/data/DNS_CHALLENGE/processed_yz
 """
