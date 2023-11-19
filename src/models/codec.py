@@ -138,6 +138,7 @@ class SwinCrossScaleCodec(BaseCodec):
                  vq_commit: float = 1., 
                  fuse_net: bool = False, 
                  scalable: bool = False, 
+                 is_causal: bool = False,
                  spec_augment: bool = False, 
                  win_len: int = 20, 
                  hop_len: int = 5, 
@@ -147,16 +148,23 @@ class SwinCrossScaleCodec(BaseCodec):
 
         self.encoder = SwinEncoder(
             swin_depth, swin_heads, window_size, mlp_ratio,
-            in_freq, patch_size, self.in_dim, self.enc_h_dims
+            in_freq, patch_size, self.in_dim, self.enc_h_dims, is_causal
         )
         self.decoder = SwinCrossScaleDecoder(
             swin_depth, swin_heads, window_size, mlp_ratio,
-            in_freq, patch_size, self.in_dim, self.dec_h_dims,
-            max_streams, fuse_net
+            in_freq, patch_size, self.in_dim, self.dec_h_dims, is_causal,
+            max_streams, fuse_net,
         )
+        
         self.quantizer = self.init_quantizer(proj, overlap, num_vqs, codebook_size, vq_commit, patch_size, cosine_similarity)
 
         if vis:
+            print(f"Codec Causality: {is_causal}")
+
+            if self.fuse_net is not None:
+                print(f"Apply Residual-Based Cross Attention Fusion Net for Swin Codec | Type: {self.fuse_net}")
+            else:
+                print("Apply Vanilla Residual Fusion Net for Swin Codec")
             self.vis_quantization()
 
     def train_one_step(self, x, x_feat, streams):
@@ -167,6 +175,7 @@ class SwinCrossScaleCodec(BaseCodec):
             x_feat = x_feat.permute(0,3,1,2)
 
         enc_hs, Wh, Ww = self.encoder.encode(x_feat)
+
         if self.scalable:
             streams = np.random.randint(1, self.max_streams+1)
 
@@ -424,12 +433,12 @@ class BaseCrossScaleDecoder(nn.Module):
             elif self.fuse_net == "vanilla":
                 residual = self.attn_pre_fuse(enc, dec, idx)
                 residual_q, vq_loss = vq(residual)
-                dec_refine = self.attn_post_fuse(enc, dec, idx)
+                dec_refine = self.attn_post_fuse(residual_q, dec, idx)
 
             elif self.fuse_net in ["window", "shiftwindow"]:
                 residual = self.w_attn_pre_fuse(enc, dec, idx)
                 residual_q, vq_loss = vq(residual)
-                dec_refine = self.w_attn_post_fuse(enc, dec, idx)
+                dec_refine = self.w_attn_post_fuse(residual_q, dec, idx)
 
         else:
             residual = self.res_pre_fuse(enc, dec)
@@ -446,7 +455,8 @@ class SwinEncoder(BaseEncoder):
                  in_freq: int = 192, 
                  patch_size: list = [3,2], 
                  in_dim: int = 2, 
-                 h_dims: list = [16,16,32,32,64,128]) -> None:
+                 h_dims: list = [16,16,32,32,64,128],
+                 is_causal: bool = False) -> None:
         super().__init__(in_dim, h_dims)
         
         self.patch_embed = PatchEmbed(in_freq, patch_size, in_dim, embed_dim=h_dims[0])
@@ -454,13 +464,13 @@ class SwinEncoder(BaseEncoder):
         self.h_dims = h_dims[1:]
         self.patch_size = patch_size
 
-        self.blocks = self.init_encoder(swin_depth, swin_heads, window_size, mlp_ratio)
+        self.blocks = self.init_encoder(swin_depth, swin_heads, window_size, mlp_ratio, is_causal)
 
         self.pre_swin = SwinTLayer(
                     self.in_h_dims[0], self.in_h_dims[0],
                     depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
-                    subsample=None
+                    subsample=None, is_causal=is_causal,
         )
 
     def encode(self, x):
@@ -481,7 +491,7 @@ class SwinEncoder(BaseEncoder):
 
         return enc_hs, Wh, Ww
 
-    def init_encoder(self, depth, num_heads, window_size, mlp_ratio):
+    def init_encoder(self, depth, num_heads, window_size, mlp_ratio, is_causal):
         blocks = nn.ModuleList()
 
         if len(num_heads) == 1:
@@ -496,7 +506,8 @@ class SwinEncoder(BaseEncoder):
                     num_heads=num_heads[i],
                     window_size=window_size,
                     mlp_ratio=mlp_ratio,
-                    subsample=PatchMerging
+                    subsample=PatchMerging,
+                    is_causal=is_causal,
                 )
             )
         return blocks
@@ -511,6 +522,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                  patch_size: list = [3,2], 
                  in_dim: int = 2, 
                  h_dims: list = [128,64,32,32,16,16], 
+                 is_causal: bool = False,
                  max_streams: int = 6, 
                  fuse_net: str = "vanilla",) -> None:
         super().__init__(in_freq//patch_size[0], in_dim, h_dims, max_streams, fuse_net)
@@ -518,10 +530,9 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         self.patch_deembed = PatchDeEmbed(in_freq, patch_size, in_dim, h_dims[-1])
         self.h_dims = self.h_dims[:-1]
         self.out_h_dims = self.out_h_dims[:-1]
-        self.blocks = self.init_decoder(swin_depth, swin_heads, window_size, mlp_ratio)
+        self.blocks = self.init_decoder(swin_depth, swin_heads, window_size, mlp_ratio, is_causal)
 
         if self.fuse_net is not None:
-            print(f"Apply Residual-Based Cross Attention Fusion Net for Swin Codec | Type: {self.fuse_net}")
             if self.fuse_net == "vanilla":
                 self.init_attn_fuse_blocks(max_streams, h_dims, f_dims=self.f_dims[1:], fuse_attn_heads=1)
 
@@ -535,14 +546,12 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                 
             else:
                 raise ValueError("fuse_net method must be in [vanilla, window, shiftwindow]")        
-        else:
-            print("Apply Vanilla Residual Fusion Net for Swin Codec")
         
         self.post_swin = SwinTLayer(
                     self.out_h_dims[-1], self.out_h_dims[-1],
                     depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
-                    subsample=None
+                    subsample=None, is_causal=is_causal
         )
 
     def decode(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
@@ -554,6 +563,14 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
             Wh, Ww: encoder last feature size
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
+
+        # if ddp_train and self.fuse_net is not None: # for ddp training
+        #     for idx in range(streams-1, self.max_streams-1):
+        #         print(f"Setting pre/post fuse net {idx} to no grad")
+        #         for param in self.pre_fuse_net[idx].parameters():
+        #             param.requires_grad = False
+        #         for param in self.post_fuse_net[idx].parameters():
+        #             param.requires_grad = False
 
         z0, vq_loss = vqs[0](enc_hs[-1])
 
@@ -574,7 +591,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         dec_hs.append(self.patch_deembed(dec_next))
         return dec_hs, vq_loss
 
-    def init_decoder(self, depth, num_heads, window_size, mlp_ratio):
+    def init_decoder(self, depth, num_heads, window_size, mlp_ratio, is_causal):
         blocks = nn.ModuleList()
         if len(num_heads) == 1:
             num_heads = num_heads[0]
@@ -591,7 +608,8 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                     num_heads=num_heads[i],
                     window_size=window_size,
                     mlp_ratio=mlp_ratio,
-                    subsample=PatchSplit
+                    subsample=PatchSplit,
+                    is_causal=is_causal
                 )
             )
         return blocks
@@ -846,6 +864,7 @@ if __name__ == "__main__":
                                 num_vqs = 6, 
                                 codebook_size = 1024, 
                                 fuse_net="shiftwindow",
+                                is_causal=True
                                 )
     outputs = codec.train_one_step(x=torch.randn(1,47920),
                          x_feat=torch.randn(1,192,600,2),

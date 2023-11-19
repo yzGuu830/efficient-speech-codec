@@ -11,6 +11,7 @@ def init_args():
     parser.add_argument("--fuse_net", type=str, default=None, choices=["vanilla", "window", "shiftwindow"])
     parser.add_argument("--shift_wa_fuse", action="store_true")
     parser.add_argument("--scalable", action="store_true")
+    parser.add_argument("--is_causal", action="store_true")
     parser.add_argument("--spec_augment", action="store_true")
 
     # swin parameter

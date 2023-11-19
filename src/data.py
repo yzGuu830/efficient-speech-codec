@@ -76,7 +76,8 @@ def make_data_loader(dataset,
                      batch_size, 
                      shuffle, 
                      verbose=True,
-                     sampler=None):
+                     sampler=None,
+                     num_workers=1,):
     data_loader = {}
     for k in dataset:
         _batch_size, _shuffle = batch_size[k], shuffle[k]
@@ -86,7 +87,7 @@ def make_data_loader(dataset,
                                         worker_init_fn=np.random.seed(seed))
         else:
             data_loader[k] = DataLoader(dataset=dataset[k], batch_size=_batch_size, shuffle=False,
-                                        sampler=sampler[k],
+                                        sampler=sampler[k], num_workers=num_workers,
                                         pin_memory=True, collate_fn=input_collate,
                                         worker_init_fn=np.random.seed(seed))
     if verbose: 

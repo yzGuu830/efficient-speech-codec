@@ -14,7 +14,7 @@ def init_args():
 
     # parser.add_argument("--scalable", action="store_true")
     # parser.add_argument("--streams", type=int, default=6)
-
+    parser.add_argument("--bit_per_stream", type=float, default=3.0)
     parser.add_argument("--save_path", type=str)
     parser.add_argument("--device", type=str, default="cuda")
 
@@ -42,9 +42,10 @@ if __name__ == "__main__":
 
     dataset = fetch_dataset("DNS_CHALLENGE", data_dir=args.data_path, in_freq=config["in_freq"])
     data_loaders = make_data_loader(dataset, 
-                                   batch_size={"train":40, "test":16}, 
+                                   batch_size={"train":12, "test":4}, 
                                    shuffle={"train":True, "test":False})
     test_dataloader = data_loaders["test"]
+
 
     performance_table = {}
     for s in range(1, 7):
@@ -56,8 +57,8 @@ if __name__ == "__main__":
                 [PESQ(input['audio'][j].cpu().numpy(), outputs['recon_audio'][j].cpu().numpy()) for j in range(input['audio'].size(0))]
             )
         performance = np.mean(obj_scores)
-        performance_table[f"{s*3}kbps"] = performance
-        print(f"{s*3}kbps PESQ: {performance}")
+        performance_table[f"{s*args.bit_per_stream:.2f}kbps"] = performance
+        print(f"{s*args.bit_per_stream:.2f}kbps PESQ: {performance}")
     print("Saving Full Performance Table into ", f"{args.model_path}/performance.json")
     json.dump(performance, open(f"{args.model_path}/performance.json", 'w'), indent=4)
     
@@ -66,8 +67,12 @@ python evaluate_swin_perf.py \
     --model_path /scratch/eys9/output/swin-18k-scale-baseline \
     --data_path /scratch/eys9/data/DNS_CHALLENGE/processed_yz
 
-export CUDA_VISIBLE_DEVICES=1
 python evaluate_swin_perf.py \
     --model_path /scratch/eys9/output/swin-18k-scale-flatten-attn-fuse \
     --data_path /scratch/eys9/data/DNS_CHALLENGE/processed_yz
+
+python evaluate_swin_perf.py \
+    --model_path /scratch/eys9/output/swin-9k-scale-window-fuse \
+    --data_path /scratch/eys9/data/DNS_CHALLENGE/processed_yz \
+    --bit_per_stream 1.5
 """

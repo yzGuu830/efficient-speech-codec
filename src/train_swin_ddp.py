@@ -20,17 +20,19 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-torch.manual_seed(args.seed)
-random.seed(args.seed)
-np.random.seed(args.seed)
-
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    os.environ['NCCL_BLOCKING_WAIT'] = '1'
+    # os.environ['NCCL_BLOCKING_WAIT'] = '1'
     dist.init_process_group('nccl', init_method='env://',
                                     timeout=datetime.timedelta(seconds=1800),
                                     rank=rank, world_size=world_size)
+    
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
     torch.cuda.set_device(rank)
 
 def cleanup():
@@ -44,11 +46,13 @@ def init_model(rank):
         "proj": args.proj, "overlap": args.overlap, "num_vqs": args.num_vqs, "codebook_size": args.codebook_size, 
         "cosine_similarity": args.cosine_sim,
         "mel_nfft": args.mel_nfft, "mel_bins": args.mel_bins, 
-        "fuse_net": args.fuse_net, "scalable": args.scalable, 
+        "fuse_net": args.fuse_net, "scalable": args.scalable, "is_causal": args.is_causal,
         "spec_augment": args.spec_augment, "win_len": args.win_len, "hop_len": args.hop_len, "sr": args.sr,
         "vis": rank == 0
         }
     if rank == 0: 
+        if not os.path.exists(f"{args.save_dir}/{args.wb_exp_name}"):
+            os.makedirs(f"{args.save_dir}/{args.wb_exp_name}")
         json.dump(configs, open(f"{args.save_dir}/{args.wb_exp_name}/config.json", "w", encoding='utf-8'))
         print(f"Saving into {args.save_dir}/{args.wb_exp_name}")
 
@@ -86,8 +90,6 @@ def train_epoch(model, optimizer, scheduler, data_loader, progress_bar, rank):
         torch.nn.utils.clip_grad_norm_(model.parameters(), .5)
         optimizer.step()
         scheduler.step()
-
-        torch.distributed.barrier()
         
         # Log Training Process
         if rank == 0:
@@ -111,6 +113,7 @@ def train_epoch(model, optimizer, scheduler, data_loader, progress_bar, rank):
             #         outputs = [model(**dict(x=input["audio"], x_feat=input["feat"], streams=j, train=False)) for j in range(1, args.max_streams+1)]
             #         raw_aud, raw_stft, recon_auds, recon_stfts = input['audio'][0, :], input['feat'][0, :], [output['recon_audio'][0, :] for output in outputs], [output['recon_feat'][0, :] for output in outputs]
             #         show_and_save_multiscale(raw_aud, raw_stft, recon_auds, recon_stfts, path=f'{save_path}/runs/{model_tag}/train_epoch{epoch}_batch{i+1}.jpg', mel=True, use_wb=cfg.use_wb)
+    # torch.distributed.barrier()
 
 def validate_epoch(model, data_loader, rank):
     model.eval()
@@ -154,7 +157,9 @@ def main(rank, world_size):
 
     # Initialize Model Optimizer Scheduler
     model = init_model(rank).cuda(rank)
-    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[rank], 
+                find_unused_parameters=True
+                )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = transformers.get_constant_schedule(optimizer)
@@ -165,7 +170,7 @@ def main(rank, world_size):
                "test": DistributedSampler(dataset["test"], num_replicas=world_size, rank=rank, shuffle=False)}
     data_loaders = make_data_loader(dataset, 
                                     batch_size={"train":args.train_bs_per_device, "test":args.test_bs_per_device}, 
-                                    shuffle={"train":False, "test":False}, sampler=sampler)
+                                    shuffle={"train":False, "test":False}, sampler=sampler, num_workers=3, verbose=(rank==0))
 
     train_step_per_epoch, test_step_per_epoch = len(data_loaders['train']), len(data_loaders['test'])
     args.max_train_steps = train_step_per_epoch*args.epochs
@@ -183,7 +188,7 @@ def main(rank, world_size):
         test_perf = []
 
     # Training 
-    progress_bar = tqdm(initial=(start_epoch-1)*train_step_per_epoch, total=args.max_train_steps, position=0, leave=True)
+    progress_bar = tqdm(initial=(start_epoch-1)*train_step_per_epoch, total=args.max_train_steps, position=0, leave=True) if rank == 0 else None
     for epoch in range(start_epoch, args.epochs+1):
         if rank == 0: print(f"Epoch {epoch} Training:")
         sampler["train"].set_epoch(epoch)
@@ -218,10 +223,26 @@ if __name__ == "__main__":
 """
 python train_swin_ddp.py \
     --max_streams 6 \
+    --overlap 2 \
+    --wb_project_name deep-audio-compress \
+    --wb_exp_name swin-18k-scale-window-fuse \
+    --scalable \
+    --fuse_net window \
+    --epochs 60 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 15 \
+    --test_bs_per_device 4 \
+    --num_device 4 \
+    --seed 830
+
+export TORCH_DISTRIBUTED_DEBUG=INFO
+python train_swin_ddp.py \
+    --max_streams 6 \
     --swin_h_dims 45 45 72 96 192 384 \
     --swin_heads 3 3 6 12 24 \
     --proj 8 8 4 4 4 4 \
     --overlap 4 \
+    --wb_project_name deep-audio-compress \
     --wb_exp_name swin-9k-scale-baseline \
     --scalable \
     --epochs 60 \
@@ -235,8 +256,26 @@ python train_swin_ddp.py \
     --max_streams 6 \
     --swin_h_dims 45 45 72 96 192 384 \
     --swin_heads 3 3 6 12 24 \
+    --proj 8 8 4 4 4 4 \
+    --overlap 4 \
+    --wb_project_name deep-audio-compress \
+    --wb_exp_name swin-9k-scale-window-fuse \
+    --scalable \
+    --fuse_net window \
+    --epochs 60 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 15 \
+    --test_bs_per_device 4 \
+    --num_device 4 \
+    --seed 830
+
+python train_swin_ddp.py \
+    --max_streams 6 \
+    --swin_h_dims 45 45 72 96 192 384 \
+    --swin_heads 3 3 6 12 24 \
     --proj 16 16 16 16 16 16 \
     --overlap 4 \
+    --wb_project_name deep-audio-compress \
     --wb_exp_name swin-9k-scale-vqimprove \
     --cosine_sim \
     --scalable \
@@ -253,22 +292,7 @@ python train_swin_ddp.py \
     --wb_project_name deep-audio-compress \
     --wb_exp_name swin-18k-scale-shifted-window-attn-fuse \
     --scalable \
-    --fuse_net \
-    --shift_wa_fuse \
-    --epochs 60 \
-    --lr 1.0e-4 \
-    --train_bs_per_device 15 \
-    --test_bs_per_device 4 \
-    --num_device 4 \
-    --seed 830
-
-python train_swin_ddp.py \
-    --max_streams 6 \
-    --overlap 2 \
-    --wb_project_name deep-audio-compress \
-    --wb_exp_name swin-18k-scale-window-attn-fuse \
-    --scalable \
-    --fuse_net \
+    --fuse_net shiftwindow \
     --epochs 60 \
     --lr 1.0e-4 \
     --train_bs_per_device 15 \
@@ -282,7 +306,7 @@ python train_swin_ddp.py \
     --wb_project_name deep-audio-compress \
     --wb_exp_name swin-18k-scale-flatten-attn-fuse \
     --scalable \
-    --fuse_net \
+    --fuse_net vanilla \
     --epochs 60 \
     --lr 1.0e-4 \
     --train_bs_per_device 15 \

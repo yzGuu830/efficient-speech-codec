@@ -18,6 +18,7 @@ class SwinTLayer(nn.Module):
                  qk_scale=None,
                  proj_drop=0.,
                  attn_drop=0.,
+                 is_causal=False,
                  norm_layer=nn.LayerNorm,
                  subsample=None,
                  scale_factor=(2,1)
@@ -41,6 +42,7 @@ class SwinTLayer(nn.Module):
                  attn_drop=attn_drop, 
                  act_layer=nn.GELU, 
                  norm_layer=nn.LayerNorm,
+                 causal=is_causal
                 )
             for i in range(depth)])
         
@@ -104,6 +106,7 @@ class SwinTBlock(nn.Module):
                  attn_drop=0., 
                  act_layer=nn.GELU, 
                  norm_layer=nn.LayerNorm,
+                 causal=False,
                  ):
         super().__init__()
         self.d_model = d_model
@@ -121,6 +124,8 @@ class SwinTBlock(nn.Module):
         self.norm2 = norm_layer(d_model)
         mlp_hidden_dim = int(d_model * mlp_ratio)
         self.mlp = FeedForward(d_model, d_model, mlp_hidden_dim, proj_drop, act_layer)
+
+        self.causal = causal
 
         self.H = None
         self.W = None
@@ -152,6 +157,12 @@ class SwinTBlock(nn.Module):
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+
+        if self.causal:
+            num_window, N = x_windows.size(0), x_windows.size(1)
+            causal_mask = torch.tril(torch.ones((N, N), device=x.device))
+            causal_mask = causal_mask.unsqueeze(0).repeat(num_window, 1, 1)
+            attn_mask = (causal_mask - 1) * 1e9
 
         # W-MSA/SW-MSA
         attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
@@ -213,7 +224,7 @@ class WindowAttention(nn.Module):
         trunc_normal_(self.relative_position_bias_table, std=.02)
         self.softmax = nn.Softmax(dim=-1)
     
-    def forward(self, x, mask=None, causal=False):
+    def forward(self, x, mask=None):
         """ Forward function.
         Args:
             x: input features with shape of (num_windows*B, N, C)
@@ -221,7 +232,7 @@ class WindowAttention(nn.Module):
         """
         B_, N, C = x.shape
         qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+        q, k, v = qkv[0], qkv[1], qkv[2]
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
@@ -231,19 +242,12 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         attn = attn + relative_position_bias.unsqueeze(0)
 
-        # Apply causal mask if causal flag is set
-        if causal:
-            causal_mask = torch.tril(torch.ones((N, N), device=x.device))
-            attn = attn + (causal_mask - 1) * 1e9
-
         if mask is not None:
             nW = mask.shape[0]
             attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
 
+        attn = self.softmax(attn)
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
