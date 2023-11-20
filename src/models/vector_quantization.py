@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.convolution import Convolution1D
 
 class GroupVQ(nn.Module):
 
@@ -19,9 +18,6 @@ class GroupVQ(nn.Module):
         
         self.fix_dim = get_multiple(in_dim*H//proj, num_vqs) if proj > 1 else in_dim*H
 
-        # self.proj_down = Convolution1D(in_dim*H, self.fix_dim, kernel_size=1, bias=False, causal=True) if proj > 1 else None
-        # self.proj_up = Convolution1D(self.fix_dim, in_dim*H, kernel_size=1, bias=False, causal=True) if proj > 1 else None
-        # 1d convolution with kernelsize 1 equivalent to nn.linear
         self.proj_down = nn.Linear(in_dim*H, self.fix_dim, bias=False) if proj > 1 else None
         self.proj_up = nn.Linear(self.fix_dim, in_dim*H, bias=False) if proj > 1 else None
 
@@ -119,24 +115,26 @@ class GroupVQ(nn.Module):
 
         z_ = self.pre_process(z)
 
-        codes = []
+        codes = [] # bs*group_size*points_to_quantize(T in our model)
         s_idx = 0
         for i in range(len(self.vq_dims)):
             e_idx = s_idx + self.vq_dims[i]
             z_i = z_[:, :, s_idx:e_idx]
 
-            code, _, _ = self.vqs[i].quantize(z_i, self.cosine_similarity)
+            code, _, _ = self.vqs[i].quantize(z_i, self.cosine_similarity) # bs*points_to_quantize
             codes.append(code)
 
             s_idx = e_idx
 
-        return codes
+        codes = torch.stack(codes, dim=1)
+        return codes # bs*group_size*points_to_quantize
     
     def decode(self, codes, dim: int=3):
 
         z_q = []
-        for i, code in enumerate(codes):
-
+        for i in range(codes.size(1)):
+            
+            code = codes[:, i:i+1, :]
             z_q_i = self.vqs[i].dequantize(code)
             z_q.append(z_q_i)
 

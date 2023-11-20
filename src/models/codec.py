@@ -225,6 +225,28 @@ class SwinCrossScaleCodec(BaseCodec):
             return self.train_one_step(x, x_feat, streams)
         else:
             return self.test_one_step(x, x_feat, streams)
+        
+    @torch.inference_mode()
+    def encode(self, x, num_streams=6):
+        self.eval()
+
+        x_feat = self.spec_transform(x)
+        enc_hs, Wh, Ww = self.encoder.encode(x_feat)
+
+        multi_codes = self.decoder.quantize(enc_hs, num_streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+
+        return multi_codes, (Wh, Ww)
+    
+    @torch.inference_mode()
+    def decode(self, multi_codes, enc_feat_size=(64, 300)):
+        self.eval()
+
+        Wh, Ww = enc_feat_size
+        dec_hs = self.decoder.dequantize(multi_codes, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+
+        rec_feat = dec_hs[-1]
+        rec_x = self.audio_reconstruct(rec_feat)
+        return rec_x
 
 class ConvCrossScaleCodec(BaseCodec):
     def __init__(self, 
@@ -340,14 +362,24 @@ class BaseCrossScaleDecoder(nn.Module):
         self.fuse_net = fuse_net
         self.max_streams = max_streams
 
+        if self.fuse_net is None:
+            self.pre_fuse, self.post_fuse = self.res_pre_fuse, self.res_post_fuse
+        elif self.fuse_net == "conv":
+            self.pre_fuse, self.post_fuse = self.conv_pre_fuse, self.conv_post_fuse
+        elif self.fuse_net == "vanilla":
+            self.pre_fuse, self.post_fuse = self.attn_pre_fuse, self.attn_post_fuse
+        elif self.fuse_net in ["window", "shiftwindow"]:
+            self.pre_fuse, self.post_fuse = self.w_attn_pre_fuse, self.w_attn_post_fuse
+
     def vis_decoder(self, dec_hs):
         for i, hs in enumerate(dec_hs):
             print(f"layer {i+1} output:", hs.shape)
     
-    def res_pre_fuse(self, enc, dec):
+    def res_pre_fuse(self, enc, dec, idx=None):
         return enc - dec
-    def res_post_fuse(self, residual_q, dec):
+    def res_post_fuse(self, residual_q, dec, idx=None):
         return residual_q + dec
+    
     def conv_pre_fuse(self, enc, dec, idx):
         """enc/dec shape: [B, C, F, T]"""
         return self.pre_fuse_net[idx](torch.cat([enc,dec],dim=1))
@@ -360,17 +392,14 @@ class BaseCrossScaleDecoder(nn.Module):
 
         window_attn = self.pre_fuse_net[idx]
         aligned_dec, _ = window_attn((dec, enc))
-
         residual = enc - aligned_dec
 
         return residual
-    
-    def w_attn_post_fuse(self, enc, dec, idx):
-        """enc/dec shape: [B, F*T, C]"""
+    def w_attn_post_fuse(self, residual_q, dec, idx):
+        """residual_q/dec shape: [B, F*T, C]"""
 
         window_attn = self.post_fuse_net[idx]
-        aligned_enc, _ = window_attn((enc, dec))
-
+        aligned_enc, _ = window_attn((residual_q, dec))
         dec_refine = dec + aligned_enc
 
         return  dec_refine
@@ -400,15 +429,15 @@ class BaseCrossScaleDecoder(nn.Module):
         
         return residual
 
-    def attn_post_fuse(self, enc, dec, idx):
-        """enc/dec shape: [B, F*T, C]"""
-        assert enc.size() == dec.size()
-        B, C = enc.size(0), enc.size(-1)
+    def attn_post_fuse(self, residual_q, dec, idx):
+        """residual_q/dec shape: [B, F*T, C]"""
+        assert residual_q.size() == dec.size()
+        B, C = residual_q.size(0), residual_q.size(-1)
         freq = self.f_dims[idx+1]
-        temp = enc.size(1) // freq
+        temp = residual_q.size(1) // freq
 
         # flatten to [B, T, C*F]
-        enc1d = enc.view(B, freq, temp, C).contiguous().\
+        enc1d = residual_q.view(B, freq, temp, C).contiguous().\
             permute(0,2,3,1).reshape(B, temp, C*freq)
 
         dec1d = dec.view(B, freq, temp, C).contiguous().\
@@ -424,27 +453,24 @@ class BaseCrossScaleDecoder(nn.Module):
         return dec_refine
 
     def csvq_layer(self, enc, dec, idx, vq):
-        if self.fuse_net is not None:
-            if self.fuse_net == "conv":
-                residual = self.conv_pre_fuse(enc, dec, idx)
-                residual_q, vq_loss = vq(residual)
-                dec_refine = self.conv_post_fuse(residual_q, dec, idx)
-            
-            elif self.fuse_net == "vanilla":
-                residual = self.attn_pre_fuse(enc, dec, idx)
-                residual_q, vq_loss = vq(residual)
-                dec_refine = self.attn_post_fuse(residual_q, dec, idx)
+        # Quantization Forward that combines quantize and dequantize
+        residual = self.pre_fuse(enc, dec, idx)
+        residual_q, vq_loss = vq(residual)
+        dec_refine = self.post_fuse(residual_q, dec, idx)
 
-            elif self.fuse_net in ["window", "shiftwindow"]:
-                residual = self.w_attn_pre_fuse(enc, dec, idx)
-                residual_q, vq_loss = vq(residual)
-                dec_refine = self.w_attn_post_fuse(residual_q, dec, idx)
-
-        else:
-            residual = self.res_pre_fuse(enc, dec)
-            residual_q, vq_loss = vq(residual)
-            dec_refine = self.res_post_fuse(residual_q, dec)
         return dec_refine, vq_loss
+    
+    def csvq_quantize(self, enc, dec, idx, vq):
+
+        residual = self.pre_fuse(enc, dec, idx)
+        codes = vq.encode(residual)
+        return codes
+    
+    def csvq_dequantize(self, codes, dec, idx, vq):
+
+        residual_q = vq.decode(codes, dim=3) # dim=3 for transformer / dim=4 for convolution
+        dec_refine = self.post_fuse(residual_q, dec, idx)
+        return dec_refine
 
 class SwinEncoder(BaseEncoder):
     def __init__(self, 
@@ -555,7 +581,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         )
 
     def decode(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
-        """Step-wise Fuse decoding (Forward Training)
+        """Step-wise Fuse decoding (Combines Quantize and Dequantize for Forward Training)
         Args: 
             enc_hs: a list of encoded features at multiple scale
             streams: number of bitstreams to use <= depth + 1
@@ -563,14 +589,6 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
             Wh, Ww: encoder last feature size
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
-
-        # if ddp_train and self.fuse_net is not None: # for ddp training
-        #     for idx in range(streams-1, self.max_streams-1):
-        #         print(f"Setting pre/post fuse net {idx} to no grad")
-        #         for param in self.pre_fuse_net[idx].parameters():
-        #             param.requires_grad = False
-        #         for param in self.post_fuse_net[idx].parameters():
-        #             param.requires_grad = False
 
         z0, vq_loss = vqs[0](enc_hs[-1])
 
@@ -590,6 +608,58 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         dec_next, Wh, Ww = self.post_swin(dec_next, Wh, Ww)
         dec_hs.append(self.patch_deembed(dec_next))
         return dec_hs, vq_loss
+    
+    def quantize(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
+        """Step-wise Compression (Quantize to code for Inference)
+        Args: 
+            enc_hs: a list of encoded features at multiple scale
+            streams: number of bitstreams to use <= depth + 1
+            vqs: a modulelist of quantizers with size $depth$
+            Wh, Ww: encoder last feature size
+        returns: multi-scale codes
+        """
+        assert streams <= self.max_streams and len(vqs) == self.max_streams
+
+        codes0 = vqs[0].encode(enc_hs[-1])
+        if streams == 1:
+            return [codes0]
+        
+        z0 = vqs[0].decode(codes0)
+        multi_codes, dec_hs = [codes0], [z0]
+        for i in range(streams-1):
+            codes_i = self.csvq_quantize(enc=enc_hs[-1-i], dec=dec_hs[i], idx=i, vq=vqs[i+1])
+            multi_codes.append(codes_i)
+            if len(multi_codes) == streams: 
+                break
+            dec_i_refine = self.csvq_dequantize(codes=codes_i, dec=dec_hs[i], idx=i, vq=vqs[i+1])
+
+            dec_next, Wh, Ww = self.blocks[i](dec_i_refine, Wh, Ww)
+            dec_hs.append(dec_next)
+
+        return multi_codes
+    
+    def dequantize(self, multi_codes: list, vqs: nn.ModuleList, Wh: int, Ww: int):
+        """Step-wise DeCompression (DeQuantize code for Inference)
+        Args: 
+            multi_codes: a list of encoded residual codes at multiple scale
+            vqs: a modulelist of quantizers with size $depth$
+            Wh, Ww: encoder last feature size
+        returns: multi-scale codes
+        """
+        streams = len(multi_codes)
+        assert streams <= self.max_streams and len(vqs) == self.max_streams
+
+        z0 = vqs[0].decode(multi_codes[0])
+        dec_hs = [z0]
+        for i in range(streams-1): # Using code of residuals to refine decoding
+            dec_i_refine = self.csvq_dequantize(codes=multi_codes[i+1], dec=dec_hs[i], idx=i, vq=vqs[i+1])
+
+            dec_next, Wh, Ww = self.blocks[i](dec_i_refine, Wh, Ww)
+            dec_hs.append(dec_next)
+
+        dec_next, Wh, Ww = self.post_swin(dec_next, Wh, Ww)
+        dec_hs.append(self.patch_deembed(dec_next))
+        return dec_hs
 
     def init_decoder(self, depth, num_heads, window_size, mlp_ratio, is_causal):
         blocks = nn.ModuleList()
