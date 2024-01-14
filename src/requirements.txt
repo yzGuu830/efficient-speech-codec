@@ -1,5 +1,0 @@
-wandb==0.15.4
-transformers==4.33.0
-librosa==0.10.0
-timm==0.9.7
-pesq==0.0.4

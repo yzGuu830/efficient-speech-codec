@@ -5,12 +5,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataloader import default_collate
 
 from torch.utils.data import Dataset
-
 from utils import load
 
-seed = 53
-win_len, hop_len = 20, 5
-sr = 16000
 
 class DNS_CHALLENGE(Dataset):
     data_name = 'DNS_CHALLENGE'
@@ -18,10 +14,8 @@ class DNS_CHALLENGE(Dataset):
 
     def __init__(self, data_dir, split, ft) -> None:
         
-        self.split = split
-
         self.feat_trans = ft
-
+        self.split = split
         self.source_audio = load('{}/{}.pt'.format(data_dir, self.split), mode='torch')
 
     def __len__(self): # return dataset length
@@ -30,7 +24,7 @@ class DNS_CHALLENGE(Dataset):
     def __getitem__(self, idx): # return ith audio waveform data 
         input = {'audio':self.source_audio[idx][:-80]}
         input['feat'] = torch.view_as_real(self.feat_trans(input['audio'])) # [F=nfft//2-1, T=600, 2]
-
+        # input['feat'] = None
         return input
 
     def __repr__(self):
@@ -39,7 +33,7 @@ class DNS_CHALLENGE(Dataset):
         return fmt_str
     
 
-def fetch_dataset(data_name, data_dir, in_freq=192):
+def fetch_dataset(data_name, data_dir, in_freq=192, win_len=20, hop_len=5, sr=16000):
     dataset = {}    
     if data_name in ['DNS_CHALLENGE']:
         dataset['train'] = DNS_CHALLENGE(
@@ -62,12 +56,11 @@ def input_collate(batch):
     if isinstance(batch[0], dict):
         output = {key: [] for key in batch[0].keys()}  # output = {'audio':[.....], 'feature':[.....]}
         for b in batch:
-            for key in b:
+            for key in b:    
                 output[key].append(b[key])
 
         for key in output:
             output[key] = torch.stack(output[key],dim=0)
-
         return output
     else:
         return default_collate(batch)
@@ -77,19 +70,22 @@ def make_data_loader(dataset,
                      shuffle, 
                      verbose=True,
                      sampler=None,
-                     num_workers=1,):
+                     num_workers=1,
+                     seed=0,):
     data_loader = {}
     for k in dataset:
         _batch_size, _shuffle = batch_size[k], shuffle[k]
         if sampler is None:
             data_loader[k] = DataLoader(dataset=dataset[k], batch_size=_batch_size, shuffle=_shuffle,
-                                        pin_memory=True, collate_fn=input_collate,
-                                        worker_init_fn=np.random.seed(seed))
+                                        pin_memory=True, collate_fn=input_collate, num_workers=num_workers,
+                                        worker_init_fn=np.random.seed(seed)
+                                        )
         else:
             data_loader[k] = DataLoader(dataset=dataset[k], batch_size=_batch_size, shuffle=False,
                                         sampler=sampler[k], num_workers=num_workers,
-                                        pin_memory=True, collate_fn=input_collate,
-                                        worker_init_fn=np.random.seed(seed))
+                                        pin_memory=False, collate_fn=input_collate,
+                                        # worker_init_fn=np.random.seed(seed)
+                                        )
     if verbose: 
         print("data ready")
     return data_loader

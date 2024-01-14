@@ -2,7 +2,7 @@ import os
 import torch
 import pickle
 import numpy as np
-import errno
+import errno, argparse
 
 from pesq import pesq, NoUtterancesError, BufferTooShortError
 import librosa
@@ -10,6 +10,7 @@ import torchaudio
 import matplotlib.pyplot as plt
 import seaborn as sns
 import wandb, math
+from collections import OrderedDict
 
 
 def PSNR(img1, img2):
@@ -27,6 +28,23 @@ def PESQ(raw, recon):
     except BufferTooShortError as e2:
         obj_score = 0.0
     return obj_score
+
+def ViSQOL(raw, recon):
+
+    obj_score = 0
+
+    return obj_score
+
+
+def dict2namespace(config):
+    namespace = argparse.Namespace()
+    for key, value in config.items():
+        if isinstance(value, dict):
+            new_value = dict2namespace(value)
+        else:
+            new_value = value
+        setattr(namespace, key, new_value)
+    return namespace
 
 def show_and_save(raw_aud, recon_aud, save_path=None, use_wb=False):
     x1 = raw_aud.squeeze().cpu().numpy()
@@ -56,6 +74,14 @@ def show_and_save(raw_aud, recon_aud, save_path=None, use_wb=False):
             torchaudio.save(f"{save_path}/raw.wav", raw_aud.cpu(), 16000)
             torchaudio.save(f"{save_path}/recon.wav", recon_aud.cpu(), 16000)
 
+def manage_checkpoint(ckp,):
+    new_state_dict = OrderedDict()
+    for key, value in ckp['model_state_dict'].items():
+        if key.startswith('module.'):
+            new_state_dict[key[7:]] = value
+        else:
+            new_state_dict[key] = value
+    return new_state_dict
 
 def check_exists(path): # check if the path exists
     return os.path.exists(path)
