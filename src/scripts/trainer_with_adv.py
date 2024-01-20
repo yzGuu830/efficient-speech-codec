@@ -273,7 +273,7 @@ class Trainer:
                                         sampler={"train": None, "test": None}, 
                                         num_workers=args.num_worker, verbose=True, seed=args.seed)
 
-        train_steps_per_epoch, test_steps_per_epoch = len(data_loaders['train']), len(data_loaders['test'])
+        train_steps_per_epoch, test_steps_per_epoch = len(data_loaders['train']) // args.num_device, len(data_loaders['test']) // args.num_device
         max_train_steps = train_steps_per_epoch*args.num_epochs
         self.args.train_steps_per_epoch = train_steps_per_epoch
         self.args.max_train_steps = max_train_steps
