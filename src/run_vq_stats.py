@@ -25,7 +25,7 @@ def count_codebook_stats(model, dl, max_streams=5, num_vq=6, codebook_size=1024,
         multi_codes, _ = model.encode(x, num_streams=max_streams) 
 
         for s in range(max_streams):
-            stream_s_code = multi_codes[s]
+            stream_s_code = multi_codes[s] # batch_size, group_size, N
             for g in range(num_vq):
                 stream_s_group_g_code = stream_s_code[:,g,:]
                 vq_counts, vq_total_counts = update_stats(stream_s_group_g_code, s, g, vq_counts, vq_total_counts)
@@ -179,9 +179,17 @@ python run_vq_stats.py \
     --device cuda
 
 python run_vq_stats.py \
-    --config residual_18k.yml \
-    --weight_pth ../output/swin-18k-residual \
-    --split train \
+    --config residual_18k_vq_ema.yml \
+    --weight_pth ../output/swin-18k-residual-vq-ema \
+    --split test \
+    --num_streams 6 \
+    --num_worker 4 \
+    --device cuda
+
+python run_vq_stats.py \
+    --config residual_18k_vq_control.yml \
+    --weight_pth ../output/swin-18k-residual-vq-control \
+    --split test \
     --num_streams 6 \
     --num_worker 4 \
     --device cuda

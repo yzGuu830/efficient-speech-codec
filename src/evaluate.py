@@ -94,4 +94,10 @@ python evaluate.py \
     --bit_per_stream 3.0 \
     --device cuda 
 
+python evaluate.py \
+    --config residual_18k_vq_ema.yml \
+    --weight_pth ../output/swin-18k-residual-vq-ema \
+    --data_pth ../data/DNS_CHALLENGE/processed_yz \
+    --bit_per_stream 3.0 \
+    --device cuda 
 """

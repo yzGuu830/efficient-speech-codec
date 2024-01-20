@@ -15,7 +15,7 @@ model:
     mlp_ratio: 4.
     max_streams: 6
     overlap: 2
-    num_vqs: 6
+    num_vqs: 3
     proj_ratio: 1.
     codebook_size: 1024
     codebook_dims: [8]

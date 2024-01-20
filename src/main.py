@@ -1,6 +1,7 @@
 import yaml, os, argparse
 from utils import dict2namespace
 from scripts.ddp_trainer import main as ddp_main
+from scripts.trainer_with_adv import main as dp_main_adv
 from scripts.dp_trainer import main as dp_main
 import torch.multiprocessing as mp
 import warnings
@@ -15,7 +16,10 @@ def parse_args_and_config():
     parser.add_argument("--parallel", default="ddp", type=str)
     parser.add_argument('--wb_exp_name', type=str, default='swin-18k', help='WandB exp name')
     parser.add_argument('--wb_project_name', type=str, default=None, help='WandB project name')
-    parser.add_argument("--save_dir", type=str, default="/scratch/eys9/output")
+    parser.add_argument("--save_dir", type=str, default="/root/autodl-fs/output")
+    parser.add_argument("--adv_training", action="store_true")
+    parser.add_argument("--q_dropout_rate", type=float, default=1.0)
+    parser.add_argument("--trans_on_cpu", action="store_true")
 
     # Train & Test
     parser.add_argument("--num_epochs", type=int, default=80)
@@ -28,6 +32,7 @@ def parse_args_and_config():
     parser.add_argument("--warmup_steps", default=0, type=int)
     parser.add_argument("--plot_interval", type=float, default=.66)
     parser.add_argument("--info_steps", type=int, default=5)
+    parser.add_argument("--eval_every", type=int, default='epoch')
 
     args = parser.parse_args()
 
@@ -48,9 +53,13 @@ if __name__ == "__main__":
 
     elif args.parallel == "dp":
         dp_main(args, config)
+
+    elif args.parallel == 'accel' and args.adv_training:
+        dp_main_adv(args, config)
     
 
 """
+## Baseline ##
 python main.py \
     --config residual_18k.yml \
     --seed 53 \
@@ -64,6 +73,21 @@ python main.py \
     --parallel dp \
     --num_worker 4
 
+## Re-span to compare with DAC ##
+python main.py \
+    --config residual_9k.yml \
+    --seed 53 \
+    --wb_exp_name swin-9k-residual \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 80 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 60 \
+    --test_bs_per_device 16 \
+    --num_device 2 \
+    --parallel dp \
+    --num_worker 8
+
+## Ablation on VQ training approach ##
 python main.py \
     --config residual_18k_vq_control.yml \
     --seed 53 \
@@ -76,31 +100,49 @@ python main.py \
     --num_device 4 \
     --parallel dp \
     --num_worker 4
+python main.py \
+    --config residual_18k_vq_ema.yml \
+    --seed 53 \
+    --wb_exp_name swin-18k-residual-vq-ema \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 80 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 60 \
+    --test_bs_per_device 16 \
+    --num_device 4 \
+    --parallel dp \
+    --num_worker 16
 
-python main.py \
-    --config residual_15k.yml \
+
+## Ablation on GAN effects on ours ##
+accelerate launch main.py \
+    --config residual_18k_gan.yml \
     --seed 53 \
-    --wb_exp_name swin-15k-residual-dac-loss \
+    --wb_exp_name swin-18k-residual-gan \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 15 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 10 \
+    --test_bs_per_device 8 \
+    --num_device 2 \
+    --parallel accel \
+    --adv_training \
+    --num_worker 32
+
+
+## Ablation on Qunatization Dropout ##
+python main.py \
+    --config residual_18k.yml \
+    --seed 53 \
+    --wb_exp_name swin-18k-residual-q-dropout \
     --wb_project_name Neural_Speech_Coding \
     --num_epochs 80 \
     --lr 1.0e-4 \
     --train_bs_per_device 60 \
-    --test_bs_per_device 40 \
-    --num_device 4 \
+    --test_bs_per_device 16 \
+    --num_device 2 \
     --parallel dp \
-    --num_worker 4
-    
-python main.py \
-    --config cross_merge_15k.yml \
-    --seed 53 \
-    --wb_exp_name swin-15k-cross-merge \
-    --wb_project_name Neural_Speech_Coding \
-    --num_epochs 80 \
-    --lr 1.0e-4 \
-    --train_bs_per_device 60 \
-    --test_bs_per_device 40 \
-    --num_device 4 \
-    --parallel dp \
-    --num_worker 4
+    --q_dropout_rate 0.5 \
+    --num_worker 40
 
 """

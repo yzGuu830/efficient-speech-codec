@@ -4,7 +4,7 @@ import numpy as np
 from einops import rearrange
 
 import sys
-sys.path.append("/Users/tracy/Library/CloudStorage/GoogleDrive-cloudstorage.yuzhe@gmail.com/My Drive/Research/Audio_Signal_Coding/cross-swin-spec-codec/src")
+sys.path.append("/Users/tracy/Library/CloudStorage/GoogleDrive-cloudstorage.yuzhe@gmail.com/My Drive/Research/Audio_Signal_Coding/Neural-Speech-Coding/src")
 
 from models.swin.wattn import SwinTransformerLayer, WindowAlignment
 from models.swin.compress import PatchEmbed, PatchDeEmbed
@@ -49,6 +49,7 @@ class BaseCodec(nn.Module):
         
         self.quantizer = self.init_quantizer(overlap, num_vqs, proj_ratio, codebook_size, codebook_dims,
                             patch_size, use_ema, use_cosine_sim,)
+        self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
         
         self.mel_loss = MELLoss(mel_windows, mel_bins)
         self.recon_loss = L2Loss()
@@ -95,6 +96,7 @@ class BaseCodec(nn.Module):
             each_dims.append(vq.fix_dim*vq.overlap // vq.num_vqs)
             codebook_dims.append(vq.vqs[0].embedding_size)
         print("Quantization Vis: ")
+        print(f"     EMA: {self.use_ema} CosineSimilarity: {self.use_cosine_sim}")
         print("     Freq dims: ", Hs)
         print("     Channel(hidden) dims: ", in_dims)
         print("     Merged dims: ", merge_dims)
@@ -706,13 +708,14 @@ if __name__ == "__main__":
     model = SwinAudioCodec(
         h_dims=[45,72,96,144,192,384],
         swin_heads=[3,6,12,24,24],
-        codebook_dims=[None],
+        codebook_dims=8,
         num_vqs=6,
         fuse_net="None",#"cross_w_merge",
-        scalable=False,
+        scalable=True,
         max_streams=6,
-        proj_ratio=.5,
-        use_cosine_sim=False,
+        # proj_ratio=.5,
+        use_cosine_sim=True,
+        use_ema=False,
     )
 
     # model = SwinAudioCodec(

@@ -18,6 +18,7 @@ class GroupVQ(nn.Module):
         super().__init__()
 
         codebook = Codebook if not use_ema else CodebookEMA
+        if use_ema: use_cosine_sim = False
 
         self.overlap, self.codebook_dim, self.num_vqs = overlap, codebook_dim, num_vqs
         self.H, self.in_dim = H, in_dim
