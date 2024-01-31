@@ -3,8 +3,8 @@ import os, torch, wandb, transformers, random
 from models.codec import SwinAudioCodec
 from models.discriminator import Discriminator
 from models.losses.gan import GANLoss
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss
 from data import make_data_loader, fetch_dataset
-from utils import PESQ
 
 import numpy as np
 from tqdm import tqdm
@@ -19,6 +19,11 @@ class Trainer:
         self.config = config
         self.accel = accel
 
+        # Prepare Dataloaders
+        dls = self.prepare_dataloader(args, config)
+        self.train_data = accel.prepare(dls["train"])
+        self.test_data = accel.prepare(dls["test"])
+
         generator, optimizer_g, discriminator, optimizer_d, self.scheduler = self.load_train_objs(config, args)
         self.is_scalable = generator.scalable
 
@@ -28,11 +33,7 @@ class Trainer:
         )
 
         self.gan_loss = GANLoss(self.discriminator)
-
-        # Prepare Dataloaders
-        dls = self.prepare_dataloader(args, config)
-        self.train_data = accel.prepare(dls["train"])
-        self.test_data = accel.prepare(dls["test"])
+        self.obj_metric = PESQ(16000, device=self.accel.device)
         
         self.evaluation = None
         self.best_perf = None
@@ -55,6 +56,8 @@ class Trainer:
                     streams = self.config.model.max_streams
             else:
                 streams = np.random.randint(1, self.config.model.max_streams+1)
+        else:
+            streams = self.config.model.max_streams
 
         self.generator.train()
         output = self.generator(**dict(x=input["audio"], 
@@ -71,7 +74,7 @@ class Trainer:
         self.optimizer_d.zero_grad()
         # output["disc_loss"].mean().backward()
         self.accel.backward(output["disc_loss"].mean())
-        self.accel.clip_grad_norm_(self.discriminator.parameters(), .05)
+        self.accel.clip_grad_norm_(self.discriminator.parameters(), 10.0)
         self.optimizer_d.step()
 
         # Update Generator
@@ -86,7 +89,7 @@ class Trainer:
                                             self.config.loss.feat_factor * output["feat_loss"]
         self.optimizer_g.zero_grad()
         self.accel.backward(output["loss"].mean())
-        self.accel.clip_grad_norm_(self.generator.parameters(), .5)
+        self.accel.clip_grad_norm_(self.generator.parameters(), 1e3)
         self.optimizer_g.step()
         self.scheduler.step()
 
@@ -107,14 +110,11 @@ class Trainer:
                             train=False))
         local_obj_metric = []
         local_obj_metric.extend(
-            [PESQ(input['audio'][j].cpu().numpy(), 
-                  output['recon_audio'][j].cpu().numpy()) for j in range(input['audio'].size(0))]
+            self.obj_metric(input["audio"], output["recon_audio"])
         )
-        self.accel.print("Before Gathering: ", local_obj_metric)
         local_obj_metric = self.accel.gather(
             torch.tensor(local_obj_metric, device=self.accel.device)
         ).tolist()
-        self.accel.print("After Gathering: ", local_obj_metric)
 
         self.gathered_metric.extend(local_obj_metric)
 
@@ -143,18 +143,24 @@ class Trainer:
     def _test_epoch(self, epoch):
         """Distributed Evaluate"""
         self.gathered_metric = []
-        for _, input in enumerate(self.test_data): 
-            
-            self._test_batch(input)
+
+        if self.accel.is_main_process:
+            for _, input in tqdm(enumerate(self.test_data), total=len(self.test_data), desc=f"Eval Epoch {epoch}"): 
+                
+                self._test_batch(input)
+        else:
+            for _, input in enumerate(self.test_data): 
+                
+                self._test_batch(input)
 
         if self.accel.is_main_process:
             test_performance = self._log_test_batch()
             self.accel.print(f"Test PESQ: {test_performance:.4f}")
-        if test_performance > self.best_perf:
-            self.best_perf = test_performance
-            self.accel.print(f"Found Best Model at epoch {epoch}")
-            self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/best.pt")
-        self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/checkpoint.pt")
+            if test_performance > self.best_perf:
+                self.best_perf = test_performance
+                self.accel.print(f"Found Best Model at epoch {epoch}")
+                self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/best.pt")
+            self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/checkpoint.pt")
 
     def _run_epoch(self, epoch):
         # b_sz = next(iter(self.train_data))["audio"].size(0)
@@ -181,7 +187,7 @@ class Trainer:
 
     def _save_checkpoint(self, epoch, save_pth):
         """Save accel.prepare(object) checkpoints"""
-        self.accel.wait_for_everyone()
+        # self.accel.wait_for_everyone()
         ckp = {'epoch': epoch, 
             'model_state_dict': self.accel.unwrap_model(self.generator).state_dict(),
             'disc_state_dict': self.accel.unwrap_model(self.discriminator).state_dict(),
@@ -196,19 +202,19 @@ class Trainer:
     def _load_checkpoint(self, load_pth):
         """load checkpoint after train objects are prepared by accel"""
 
-        ckp = torch.load(load_pth)
+        ckp = torch.load(load_pth, map_location="cpu")
         new_state_dict = OrderedDict()
         for key, value in ckp['model_state_dict'].items():
-            if not key.startswith('module.'):
-                new_state_dict['module.' + key] = value
+            if key.startswith('module.'):
+                new_state_dict[key[7:]] = value
             else:
                 new_state_dict[key] = value
         self.accel.unwrap_model(self.generator).load_state_dict(new_state_dict)
 
         new_state_dict = OrderedDict()
         for key, value in ckp['disc_state_dict'].items():
-            if not key.startswith('module.'):
-                new_state_dict['module.' + key] = value
+            if key.startswith('module.'):
+                new_state_dict[key[7:]] = value
             else:
                 new_state_dict[key] = value
         self.accel.unwrap_model(self.discriminator).load_state_dict(new_state_dict)
@@ -233,7 +239,7 @@ class Trainer:
                                config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
                                config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
                                config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, 
-                               config.model.is_causal, config.model.fuse_net, config.model.scalable,
+                               config.model.is_causal, config.model.use_rvq, config.model.fuse_net, config.model.scalable, args.augment,
                                config.model.mel_windows, config.model.mel_bins, config.model.win_len,
                                config.model.hop_len, config.model.sr, vis=True)
         optimizer_g = torch.optim.AdamW(generator.parameters(), lr=args.lr)
@@ -251,7 +257,7 @@ class Trainer:
             scheduler = transformers.get_constant_schedule_with_warmup(optimizer_g,
                                             num_warmup_steps=args.warmup_steps) 
         elif args.scheduler_type == "cosine_warmup":
-            transformers.get_cosine_schedule_with_warmup(optimizer_g, 
+            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer_g, 
                                                         num_warmup_steps=args.warmup_steps, 
                                                         num_training_steps=args.max_train_steps)
 
@@ -270,7 +276,7 @@ class Trainer:
         data_loaders = make_data_loader(datasets, 
                                         batch_size={"train": args.train_bs_per_device, "test": args.test_bs_per_device}, 
                                         shuffle={"train": True, "test": False}, 
-                                        sampler={"train": None, "test": None}, 
+                                        sampler=None, 
                                         num_workers=args.num_worker, verbose=True, seed=args.seed)
 
         train_steps_per_epoch, test_steps_per_epoch = len(data_loaders['train']) // args.num_device, len(data_loaders['test']) // args.num_device
@@ -307,4 +313,3 @@ def main(args, config):
 
     if accel.is_main_process:
         wandb.finish()
-

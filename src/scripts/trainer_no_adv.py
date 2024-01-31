@@ -1,8 +1,8 @@
-import os, torch, wandb, transformers, random
+import os, torch, wandb, transformers, random, torchaudio
 
 from models.codec import SwinAudioCodec
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss
 from data import make_data_loader, fetch_dataset
-from utils import PESQ
 
 import numpy as np
 from tqdm import tqdm
@@ -17,20 +17,21 @@ class Trainer:
         self.config = config
         self.accel = accel
 
+        # Prepare Dataloaders
+        dls = self.prepare_dataloader(args, config)
+        self.train_data = accel.prepare(dls["train"])
+        self.test_data = accel.prepare(dls["test"])
+
         generator, optimizer, self.scheduler = self.load_train_objs(config, args)
         self.is_scalable = generator.scalable
 
         # Prepare training objects
         self.generator, self.optimizer = accel.prepare(generator, optimizer)
-
-        # Prepare Dataloaders
-        dls = self.prepare_dataloader(args, config)
-        self.train_data = accel.prepare(dls["train"])
-        self.test_data = accel.prepare(dls["test"])
         
         self.evaluation = None
         self.best_perf = None
         self.progress_bar = None
+        self.obj_metric = PESQ(sample_rate=16000, device=self.accel.device)
 
         if args.eval_every == "epoch":
             self.eval_every = self.args.train_steps_per_epoch
@@ -42,7 +43,7 @@ class Trainer:
             else:
                 raise ValueError("eval_every argument should be int or epoch")
 
-    def _train_batch(self, input):
+    def _train_batch(self, input, i):
         if self.is_scalable:
             if self.args.q_dropout_rate != 1.0:
                 # Do Random Sample N with probability q_dropout_rate
@@ -52,6 +53,8 @@ class Trainer:
                     streams = self.config.model.max_streams
             else:
                 streams = np.random.randint(1, self.config.model.max_streams+1)
+        else:
+            streams = self.config.model.max_streams
 
         output = self.generator(**dict(x=input["audio"], 
                             x_feat=input["feat"] if "feat" in input else None, 
@@ -65,7 +68,7 @@ class Trainer:
                                     self.config.loss.mel_factor * output["mel_loss"]
         self.optimizer.zero_grad()
         self.accel.backward(output["loss"].mean())
-        self.accel.clip_grad_norm_(self.generator.parameters(), .5)
+        self.accel.clip_grad_norm_(self.generator.parameters(), 6.0)
         self.optimizer.step()
         self.scheduler.step()
 
@@ -77,6 +80,12 @@ class Trainer:
             self.evaluation[key].append(output[key].mean().item())
 
         self.progress_bar.update(1)
+        if (self.progress_bar.n) in self.args.save_steps:
+            os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/", exist_ok=True)
+            torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/raw_audio_step_{self.progress_bar.n}.wav",
+                            input["audio"][0:1].cpu(), 16000)
+            torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/recon_audio_step_{self.progress_bar.n}.wav",
+                            output["recon_audio"][0:1].cpu(), 16000)
 
     def _test_batch(self, input):
         self.generator.eval()
@@ -86,8 +95,7 @@ class Trainer:
                             train=False))
         local_obj_metric = []
         local_obj_metric.extend(
-            [PESQ(input['audio'][j].cpu().numpy(), 
-                  output['recon_audio'][j].cpu().numpy()) for j in range(input['audio'].size(0))]
+            self.obj_metric(input["audio"], output["recon_audio"])
         )
         local_obj_metric = self.accel.gather(
             torch.tensor(local_obj_metric, device=self.accel.device)
@@ -112,17 +120,24 @@ class Trainer:
         
         for i, input in enumerate(self.train_data):
             
-            self._train_batch(input)
+            self._train_batch(input, i)
 
             if (i+1) % self.args.info_steps == 0 and self.accel.is_main_process:
                 self._log_train_batch()
 
+
     def _test_epoch(self, epoch):
         """Distributed Evaluate"""
         self.gathered_metric = []
-        for _, input in enumerate(self.test_data): 
-            
-            self._test_batch(input)
+
+        if self.accel.is_main_process:
+            for _, input in tqdm(enumerate(self.test_data), total=len(self.test_data), desc=f"Eval Epoch {epoch}"): 
+                
+                self._test_batch(input)
+        else:
+            for _, input in enumerate(self.test_data): 
+                
+                self._test_batch(input)
 
         if self.accel.is_main_process:
             test_performance = self._log_test_batch()
@@ -158,7 +173,7 @@ class Trainer:
 
     def _save_checkpoint(self, epoch, save_pth):
         """Save accel.prepare(object) checkpoints"""
-        self.accel.wait_for_everyone()
+        # self.accel.wait_for_everyone()
         ckp = {'epoch': epoch, 
             'model_state_dict': self.accel.unwrap_model(self.generator).state_dict(),
             'optimizer_state_dict': self.accel.unwrap_model(self.optimizer).state_dict(), 
@@ -171,11 +186,11 @@ class Trainer:
     def _load_checkpoint(self, load_pth):
         """load checkpoint after train objects are prepared by accel"""
 
-        ckp = torch.load(load_pth)
+        ckp = torch.load(load_pth, map_location="cpu")
         new_state_dict = OrderedDict()
         for key, value in ckp['model_state_dict'].items():
-            if not key.startswith('module.'):
-                new_state_dict['module.' + key] = value
+            if key.startswith('module.'):
+                new_state_dict[key[7:]] = value
             else:
                 new_state_dict[key] = value
         self.accel.unwrap_model(self.generator).load_state_dict(new_state_dict)
@@ -200,7 +215,7 @@ class Trainer:
                                config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
                                config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
                                config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, 
-                               config.model.is_causal, config.model.fuse_net, config.model.scalable,
+                               config.model.is_causal, config.model.use_rvq, config.model.fuse_net, config.model.scalable, args.augment,
                                config.model.mel_windows, config.model.mel_bins, config.model.win_len,
                                config.model.hop_len, config.model.sr, vis=True)
         optimizer = torch.optim.AdamW(generator.parameters(), lr=args.lr)
@@ -211,7 +226,7 @@ class Trainer:
             scheduler = transformers.get_constant_schedule_with_warmup(optimizer,
                                             num_warmup_steps=args.warmup_steps) 
         elif args.scheduler_type == "cosine_warmup":
-            transformers.get_cosine_schedule_with_warmup(optimizer, 
+            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, 
                                                         num_warmup_steps=args.warmup_steps, 
                                                         num_training_steps=args.max_train_steps)
 
@@ -230,7 +245,7 @@ class Trainer:
         data_loaders = make_data_loader(datasets, 
                                         batch_size={"train": args.train_bs_per_device, "test": args.test_bs_per_device}, 
                                         shuffle={"train": True, "test": False}, 
-                                        sampler={"train": None, "test": None}, 
+                                        sampler=None, 
                                         num_workers=args.num_worker, verbose=True, seed=args.seed)
 
         train_steps_per_epoch, test_steps_per_epoch = len(data_loaders['train']) // args.num_device, len(data_loaders['test']) // args.num_device
@@ -247,8 +262,9 @@ class Trainer:
 
 def main(args, config):
 
-    kwarg = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accel = Accelerator(kwargs_handlers=[kwarg])
+    # kwarg = DistributedDataParallelKwargs(find_unused_parameters=True)
+    # accel = Accelerator(kwargs_handlers=[kwarg])
+    accel = Accelerator()
     # For Reproducibility
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)

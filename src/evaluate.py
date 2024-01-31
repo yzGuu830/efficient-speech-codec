@@ -1,6 +1,7 @@
 from models.codec import SwinAudioCodec
-from utils import PESQ, manage_checkpoint, dict2namespace
+from utils import manage_checkpoint, dict2namespace
 from data import fetch_dataset, make_data_loader
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss
 
 import argparse
 import torch, json, os, yaml
@@ -26,15 +27,13 @@ def init_args_configs():
     return args, config
 
 class SwinAudioCodecEval(SwinAudioCodec):
-    def __init__(self, device, config) -> None:
+    def __init__(self, config) -> None:
         super().__init__(**vars(config.model))
-
-        self.to(device)
-        self.device = device
+        pass
 
     def from_pretrain(self, path):
         
-        ckp = torch.load(f"{path}/best.pt",map_location=self.device)
+        ckp = torch.load(f"{path}/best.pt",map_location="cpu")
         new_state_dict = manage_checkpoint(ckp)
         self.load_state_dict(new_state_dict)
         
@@ -43,8 +42,21 @@ class SwinAudioCodecEval(SwinAudioCodec):
 def eval_multi_scale(args, config):
 
     # Model
-    codec = SwinAudioCodecEval(args.device, config)
+    codec = SwinAudioCodecEval(config)
     codec.from_pretrain(args.weight_pth)
+    codec = codec.to(args.device)
+
+    # Metrics
+    mel_distance_metric = MelDistance(
+            win_lengths=[32,64,128,256,512,1024,2048],
+            n_mels=[5,10,20,40,80,160,320],
+            clamp_eps=1e-5
+        ).to(args.device)
+    sisdr_metric = SISDRLoss(
+        scaling=True, reduction="none",
+        zero_mean=True, clip_min=None, weight=1.0,
+    )
+    pesq_metric = PESQ(sample_rate=16000, device=args.device)
 
     # Data
     datasets = fetch_dataset("DNS_CHALLENGE", data_dir=config.data.data_dir, in_freq=config.data.in_freq,
@@ -59,16 +71,19 @@ def eval_multi_scale(args, config):
     # Evaluate loop
     performance_table = {}
     for s in range(1, 7):
-        obj_scores = []
+        test_perf = {"mel_dist": [], "si-sdr": [], "pesq": []}
         for i, input in tqdm(enumerate(test_dl), total=len(test_dl), desc=f"Eval at {s*args.bit_per_stream:.2f}kbps"):
-            input['audio'], input['feat'] = input['audio'].to(args.device), input['feat'].to(args.device)
+            input['audio'], input['feat'] = input['audio'].to(args.device), None
             outputs = codec(**dict(x=input["audio"], x_feat=input["feat"], streams=s, train=False))
-            obj_scores.extend(
-                [PESQ(input['audio'][j].cpu().numpy(), outputs['recon_audio'][j].cpu().numpy()) for j in range(input['audio'].size(0))]
-            )
-        performance = np.mean(obj_scores)
-        performance_table[f"{s*args.bit_per_stream:.2f}kbps"] = performance
-        print(f"{s*args.bit_per_stream:.2f}kbps PESQ: {performance:.3f}")
+
+            test_perf["mel_dist"].extend(mel_distance_metric(input["audio"], outputs['recon_audio']).tolist())
+            test_perf["si-sdr"].extend(sisdr_metric(input["audio"], outputs['recon_audio']).tolist())
+            test_perf["pesq"].extend(pesq_metric(input["audio"], outputs['recon_audio']))
+
+        for k, v in test_perf.items():
+            test_perf[k] = np.mean(v)
+        performance_table[f"{s*args.bit_per_stream:.2f}kbps"] = test_perf
+        print(f"{s*args.bit_per_stream:.2f}kbps: {test_perf}")
     print("Saving Full Performance Table into ", f"{args.weight_pth}/performance.json")
     json.dump(performance_table, open(f"{args.weight_pth}/performance.json", 'w'), indent=4)
 
@@ -99,5 +114,19 @@ python evaluate.py \
     --weight_pth ../output/swin-18k-residual-vq-ema \
     --data_pth ../data/DNS_CHALLENGE/processed_yz \
     --bit_per_stream 3.0 \
+    --device cuda 
+
+python evaluate.py \
+    --config residual_18k.yml \
+    --weight_pth ../output/swin-18k-residual-q-dropout \
+    --data_pth ../data/DNS_CHALLENGE/processed_wav \
+    --bit_per_stream 3.0 \
+    --device cuda
+
+python evaluate.py \
+    --config residual_9k_gan.yml \
+    --weight_pth ../output/swin-9k-residual-gan-250k \
+    --data_pth ../data/DNS_CHALLENGE/processed_wav \
+    --bit_per_stream 1.5 \
     --device cuda 
 """

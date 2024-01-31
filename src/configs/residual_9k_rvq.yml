@@ -1,5 +1,5 @@
 data:
-    data_dir: "/scratch/eys9/data/DNS_CHALLENGE/processed_yz"
+    data_dir: "/root/autodl-tmp/data"
     in_freq: 192
     win_len: 20
     hop_len: 5
@@ -15,15 +15,16 @@ model:
     mlp_ratio: 4.
     max_streams: 6
     overlap: 2
-    num_vqs: 6
+    num_vqs: 3
     proj_ratio: 1.
     codebook_size: 1024
-    codebook_dims: [8]
+    codebook_dims: [12]
     patch_size: [3,2]
     use_ema: False
     use_cosine_sim: True
     is_causal: False
-    fuse_net: "cross_w_merge"
+    use_rvq: True
+    fuse_net: "None"
     scalable: True
     mel_windows: [32,64,128,256,512,1024,2048]
     mel_bins: [5,10,20,40,80,160,320]

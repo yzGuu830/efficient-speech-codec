@@ -15,10 +15,10 @@ model:
     mlp_ratio: 4.
     max_streams: 6
     overlap: 2
-    num_vqs: 6
+    num_vqs: 2
     proj_ratio: 1.
     codebook_size: 1024
-    codebook_dims: [8]
+    codebook_dims: [8,8,8,12,12,16]
     patch_size: [3,2]
     use_ema: False
     use_cosine_sim: True

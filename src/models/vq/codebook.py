@@ -27,10 +27,10 @@ class Codebook(nn.Module):
         self.proj = (input_size != embedding_size)
         if self.proj:
             self.proj_down = (
-                nn.Linear(input_size, embedding_size, bias=False)
+                weight_norm(nn.Linear(input_size, embedding_size, bias=False))
             )
             self.proj_up = (
-                nn.Linear(embedding_size, input_size, bias=False)
+                weight_norm(nn.Linear(embedding_size, input_size, bias=False))
             )
 
     def quantize_to_code(self, z):

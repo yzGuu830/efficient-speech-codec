@@ -3,6 +3,112 @@ import torch.nn as nn
 from einops import rearrange
 from models.vq.codebook import Codebook, CodebookEMA
 
+class ResidualVQ(nn.Module):
+    def __init__(self, 
+                in_dim: int,
+                H: int, 
+                overlap: int = 4,
+                num_vqs: int = 6,
+                codebook_dim: int = 8,
+                codebook_size: int = 1024, 
+                use_ema: bool = False,
+                use_cosine_sim: bool = True,
+                 ) -> None:
+        super().__init__()
+
+        codebook = Codebook if not use_ema else CodebookEMA
+        if use_ema: use_cosine_sim = False
+        self.overlap, self.codebook_dim, self.num_vqs = overlap, codebook_dim, num_vqs
+        self.H, self.in_dim = H, in_dim
+        self.fix_dim = H*in_dim
+        self.vq_dims = [in_dim*H*overlap for _ in range(num_vqs)]
+        self.vqs = nn.ModuleList([ 
+                                    codebook(
+                                        input_size=in_dim,
+                                        embedding_size=codebook_dim, 
+                                        num_embedding=codebook_size, 
+                                        use_cosine_sim=use_cosine_sim,
+                                        ) 
+                                    for in_dim in self.vq_dims
+                                ]) 
+        
+    def forward(self, z):
+
+        dim = z.dim()
+
+        z = self.pre_process(z)
+        z_q, codebook_loss, commitment_loss = 0, \
+            torch.zeros(z.size(0), device=z.device), \
+                torch.zeros(z.size(0), device=z.device)
+        
+        residual = z
+        for i, quantizer in enumerate(self.vqs):
+
+            z_q_i, cm_loss, cb_loss, _ = quantizer(residual)
+
+            z_q = z_q + z_q_i
+            residual = residual - z_q_i
+
+            commitment_loss += cm_loss
+            codebook_loss += cb_loss
+
+        z_q_ = self.post_process(z_q, dim=dim)
+        return z_q_, commitment_loss, codebook_loss
+
+    def pre_process(self, z):
+        """
+        Args: 
+            z:  should be either (B, C, H, W) as image or (B, H*W, C) as sequence
+                vq requires input to be of shape (*, C)
+            returns: (B, W//overlap, overlap*H*C)
+        """
+
+        if z.dim() == 4:   # 2d output
+            assert z.size(2)==self.H and z.size(1)==self.in_dim, "z shape isn't correct"
+            z = rearrange(z, "b c h w -> b w (c h)")
+        elif z.dim() == 3: # 1d output
+            assert z.size(2)==self.in_dim, "z shape isn't correct"
+            z = rearrange(z, "b (h w) c -> b w (c h)", h=self.H)
+        else:
+            raise ValueError("dim of z is not correct")
+
+        W = z.size(1)
+
+        # if self.proj_ratio < 1.0:
+        #     z = self.in_proj(z)
+
+        # overlap frames
+        if self.overlap > 1:
+            assert W % self.overlap == 0, "T dim must be multiple of overlap"
+            z = z.view(z.size(0), W//self.overlap, self.overlap, self.fix_dim) \
+                .reshape(z.size(0), W//self.overlap, self.overlap*self.fix_dim)
+            
+        return z
+    
+    def post_process(self, z_q, dim: int = 3):
+        """
+        Args: 
+            z_q: has size (B, W//overlap, overlap*H*C) 
+            returns: either (B, C, H, W) as image when dim = 4 or (B, H*W, C) as sequence when dim = 3
+        """
+        # overlap frames
+        if self.overlap > 1:
+            z_q = z_q.view(z_q.size(0), -1, self.overlap, self.fix_dim) \
+                .reshape(z_q.size(0), -1, self.fix_dim)
+        
+        # if self.proj_ratio < 1.0:
+        #     z_q = self.out_proj(z_q)
+        
+        if dim == 3:   # 1d output
+            z_q = rearrange(z_q, "b w (c h) -> b (h w) c", h=self.H)
+            assert z_q.size(2)==self.in_dim, "z_q shape isn't correct"
+
+        elif dim == 4: # 2d output
+            z_q = rearrange(z_q, "b w (c h) -> b c h w", h=self.H)
+            assert z_q.size(2)==self.H and z_q.size(1)==self.in_dim, "z_q shape isn't correct"
+
+        return z_q
+
 class GroupVQ(nn.Module):
 
     def __init__(self, 

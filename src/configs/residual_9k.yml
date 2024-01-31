@@ -18,7 +18,7 @@ model:
     num_vqs: 3
     proj_ratio: 1.
     codebook_size: 1024
-    codebook_dims: [8]
+    codebook_dims: [12]
     patch_size: [3,2]
     use_ema: False
     use_cosine_sim: True

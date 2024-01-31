@@ -17,10 +17,12 @@ def parse_args_and_config():
     parser.add_argument("--parallel", default="ddp", type=str)
     parser.add_argument('--wb_exp_name', type=str, default='swin-18k', help='WandB exp name')
     parser.add_argument('--wb_project_name', type=str, default=None, help='WandB project name')
-    parser.add_argument("--save_dir", type=str, default="/root/autodl-fs/output")
+    parser.add_argument("--save_dir", type=str, default="/root/autodl-tmp/output")
     parser.add_argument("--adv_training", action="store_true")
     parser.add_argument("--q_dropout_rate", type=float, default=1.0)
+    parser.add_argument("--augment", action="store_true")
     parser.add_argument("--trans_on_cpu", action="store_true")
+    parser.add_argument("--save_steps", nargs="+", type=int, default=[10000, 50000, 100000, 200000])
 
     # Train & Test
     parser.add_argument("--num_epochs", type=int, default=80)
@@ -33,7 +35,7 @@ def parse_args_and_config():
     parser.add_argument("--warmup_steps", default=0, type=int)
     parser.add_argument("--plot_interval", type=float, default=.66)
     parser.add_argument("--info_steps", type=int, default=5)
-    parser.add_argument("--eval_every", type=int, default='epoch')
+    parser.add_argument("--eval_every", default='epoch')
 
     args = parser.parse_args()
 
@@ -78,18 +80,50 @@ python main.py \
     --num_worker 4
 
 ## Re-span to compare with DAC ## [to do last]
+# accelerate launch main.py \
+#     --config residual_9k.yml \
+#     --seed 53 \
+#     --wb_exp_name swin-9k-residual \
+#     --wb_project_name Neural_Speech_Coding \
+#     --num_epochs 55 \
+#     --lr 1.0e-4 \
+#     --train_bs_per_device 20 \
+#     --test_bs_per_device 16 \
+#     --num_device 2 \
+#     --parallel accel \
+#     --q_dropout_rate .5 \
+#     --num_worker 16
 accelerate launch main.py \
-    --config residual_9k.yml \
+    --config residual_6k.yml \
     --seed 53 \
-    --wb_exp_name swin-9k-residual \
+    --wb_exp_name swin-6k-residual \
     --wb_project_name Neural_Speech_Coding \
-    --num_epochs 50 \
+    --num_epochs 60 \
     --lr 1.0e-4 \
     --train_bs_per_device 20 \
     --test_bs_per_device 16 \
+    --scheduler_type cosine_warmup \
+    --warmup_steps 15000 \
     --num_device 2 \
     --parallel accel \
-    --num_worker 8
+    --q_dropout_rate .5 \
+    --num_worker 16
+
+accelerate launch main.py \
+    --config residual_6k_gan.yml \
+    --seed 53 \
+    --wb_exp_name swin-6k-residual-gan \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 60 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 20 \
+    --test_bs_per_device 16 \
+    --scheduler_type cosine_warmup \
+    --warmup_steps 15000 \
+    --num_device 2 \
+    --parallel accel \
+    --q_dropout_rate .5 \
+    --num_worker 16
 
 ## Ablation on VQ training approach ## [done]
 python main.py \
@@ -140,19 +174,6 @@ accelerate launch main.py \
     --seed 53 \
     --wb_exp_name swin-18k-residual-q-dropout \
     --wb_project_name Neural_Speech_Coding \
-    --num_epochs 55 \
-    --lr 1.0e-4 \
-    --train_bs_per_device 20 \
-    --test_bs_per_device 8 \
-    --num_device 2 \
-    --parallel accel \
-    --q_dropout_rate 0.5 \
-    --num_worker 16
-
-accelerate launch main.py \
-    --config residual_18k.yml \
-    --seed 53 \
-    --wb_exp_name swin-18k-residual-q-dropout \
     --num_epochs 55 \
     --lr 1.0e-4 \
     --train_bs_per_device 20 \

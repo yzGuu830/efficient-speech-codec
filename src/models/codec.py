@@ -8,7 +8,7 @@ sys.path.append("/Users/tracy/Library/CloudStorage/GoogleDrive-cloudstorage.yuzh
 
 from models.swin.wattn import SwinTransformerLayer, WindowAlignment
 from models.swin.compress import PatchEmbed, PatchDeEmbed
-from models.vq.quantization import GroupVQ
+from models.vq.quantization import GroupVQ, ResidualVQ
 from models.losses.generator import L2Loss, MELLoss
 
 
@@ -31,11 +31,17 @@ class BaseCodec(nn.Module):
                  win_len: int, 
                  hop_len: int, 
                  sr: int,
+                 augment: bool,
+                 use_rvq: bool,
                  ) -> None:
         super().__init__()
 
         self.in_freq, self.in_dim = in_freq, in_dim
         self.max_streams = max_streams
+
+        self.stats = None
+        self.freq_augment = torchaudio.transforms.FrequencyMasking(freq_mask_param=80, iid_masks=True) if augment else None
+        self.time_augment = torchaudio.transforms.TimeMasking(time_mask_param=80, iid_masks=True) if augment else None
 
         self.enc_h_dims = h_dims
         self.dec_h_dims = h_dims[::-1]
@@ -48,14 +54,14 @@ class BaseCodec(nn.Module):
                                             hop_length=int(hop_len*sr*1e-3))
         
         self.quantizer = self.init_quantizer(overlap, num_vqs, proj_ratio, codebook_size, codebook_dims,
-                            patch_size, use_ema, use_cosine_sim,)
+                            patch_size, use_ema, use_cosine_sim, use_rvq)
         self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
         
         self.mel_loss = MELLoss(mel_windows, mel_bins)
         self.recon_loss = L2Loss()
         
     def init_quantizer(self, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, 
-                       patch_size=None, use_ema=True, use_cosine_sim=False):
+                       patch_size=None, use_ema=True, use_cosine_sim=False, use_rvq=False):
         quantizer = nn.ModuleList()
 
         if isinstance(codebook_dims, int):
@@ -71,37 +77,51 @@ class BaseCodec(nn.Module):
 
         quantizer.append(
                 GroupVQ(
-                    self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1),
+                    self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1), # tag
                     overlap, num_vqs, proj_ratio, codebook_dims[0], codebook_size, use_ema, use_cosine_sim
+                ) if not use_rvq else \
+                ResidualVQ(
+                    self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1),
+                    overlap, num_vqs, codebook_dims[0], codebook_size, use_ema, use_cosine_sim
                 )
-            )
+            ) 
         for i in range(1, self.max_streams):
             quantizer.append(
                 GroupVQ(
-                    self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i),
+                    self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i), # tag
                     overlap, num_vqs, proj_ratio, codebook_dims[i], codebook_size, use_ema, use_cosine_sim,
+                ) if not use_rvq else \
+                ResidualVQ(
+                    self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i),
+                    overlap, num_vqs, codebook_dims[i], codebook_size, use_ema, use_cosine_sim
                 )
             ) 
-        self.max_bps = self.max_streams * math.log2(codebook_size) * num_vqs // 20
+        self.max_bps = (2/overlap) * self.max_streams * math.log2(codebook_size) * num_vqs // (20 * time_patch//2)
         print(f"Audio Codec {self.max_bps}kbps Initialized")
         return quantizer
     
     def vis_quantization(self):
+        vq_type = "Residual-VQ" if isinstance(self.quantizer[0], ResidualVQ) else "Group-VQ"
+        print("VQ-Type: ", vq_type)
         Hs, in_dims, merge_dims, each_dims, mapped_dims, codebook_dims = [], [], [], [], [], []
         for vq in self.quantizer:
             Hs.append(vq.H)
             in_dims.append(vq.in_dim)
             merge_dims.append(vq.H*vq.in_dim)
-            mapped_dims.append(vq.fix_dim)
-            each_dims.append(vq.fix_dim*vq.overlap // vq.num_vqs)
+            if vq_type == "Group-VQ":
+                mapped_dims.append(vq.fix_dim)
+                each_dims.append(vq.fix_dim*vq.overlap // vq.num_vqs)
+            elif vq_type == "Residual-VQ":
+                mapped_dims.append(vq.H*vq.in_dim)
+                each_dims.append(vq.H*vq.in_dim*vq.overlap)
             codebook_dims.append(vq.vqs[0].embedding_size)
         print("Quantization Vis: ")
         print(f"     EMA: {self.use_ema} CosineSimilarity: {self.use_cosine_sim}")
         print("     Freq dims: ", Hs)
         print("     Channel(hidden) dims: ", in_dims)
         print("     Merged dims: ", merge_dims)
-        print("     GroupVQ proj dims: ", mapped_dims)
-        print("     GroupVQ dims (for each): ", each_dims)
+        print(f"     {vq_type} proj dims: ", mapped_dims)
+        print(f"     {vq_type} dims (for each): ", each_dims)
         print("     Mapped Codebook dims (for each): ", codebook_dims)
     
     def spec_transform(self, x):
@@ -110,8 +130,14 @@ class BaseCodec(nn.Module):
             x:       audio of shape [B, L]
             returns: spectrogram of shape [B, C, H, W]
         """
-
+         
         feat = torch.view_as_real(self.ft(x)) # B, H, W, C
+        
+        # Normalization
+        if self.stats is not None:
+            m, std = self.stats["mean"].to(x.device), self.stats["std"].to(x.device)
+            feat = feat.sub(m).div(std)
+
         return rearrange(feat, "b h w c -> b c h w")
         
     def audio_reconstruct(self, feat):
@@ -144,15 +170,17 @@ class SwinAudioCodec(BaseCodec):
                  use_ema: bool = False, 
                  use_cosine_sim: bool = True, 
                  is_causal: bool = False,
+                 use_rvq: bool = False,
                  fuse_net: str = None,
                  scalable: bool = True,
+                 augment: bool = False,
                  mel_windows: int = [32,64,128,256,512,1024,2048], 
                  mel_bins: int = [5,10,20,40,80,160,320], 
                  win_len: int = 20, 
                  hop_len: int = 5, 
                  sr: int = 16000,
                  vis: bool = True,) -> None:
-        super().__init__(in_dim, in_freq, h_dims, max_streams, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, patch_size, use_ema, use_cosine_sim, mel_windows, mel_bins, win_len, hop_len, sr)
+        super().__init__(in_dim, in_freq, h_dims, max_streams, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, patch_size, use_ema, use_cosine_sim, mel_windows, mel_bins, win_len, hop_len, sr, augment, use_rvq)
 
         self.scalable = scalable
         self.fuse_net = fuse_net
@@ -168,11 +196,7 @@ class SwinAudioCodec(BaseCodec):
         )
 
         if vis:
-            print(f"Codec Causality: {is_causal}")
-            if self.fuse_net is not None:
-                print(f"Apply Residual-Based Cross Attention Fusion Net for Swin Codec | Type: {self.fuse_net}")
-            else:
-                print("Apply Vanilla Residual Fusion Net for Swin Codec")
+            print("Apply Vanilla Residual Fusion Net for Swin Codec")
             self.vis_quantization()
             self.vis_encoder_decoder()
 
@@ -183,13 +207,19 @@ class SwinAudioCodec(BaseCodec):
         else:
             x_feat = x_feat.permute(0,3,1,2)
 
-        enc_hs, Wh, Ww = self.encoder.encode(x_feat)
+        # x_feat_ = x_feat.clone()
+        # if self.time_augment is not None:
+        #     x_feat_[:, 0, :, :] = self.time_augment(x_feat_[:, 0, :, :])
+        #     x_feat_[:, 1, :, :] = self.time_augment(x_feat_[:, 1, :, :])
+        # if self.freq_augment is not None:
+        #     x_feat_[:, 0, :, :] = self.freq_augment(x_feat_[:, 0, :, :])
+        #     x_feat_[:, 1, :, :] = self.freq_augment(x_feat_[:, 1, :, :])
 
+        enc_hs, Wh, Ww = self.encoder.encode(x_feat)
         recon_feat, _, cm_loss, cb_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
         rec_x = self.audio_reconstruct(recon_feat)
 
         recon_loss = self.recon_loss(x_feat, recon_feat)
-        # recon_loss = torch.zeros(x.size(0), device=x.device)
         mel_loss = self.mel_loss(x, rec_x)
 
         return {
@@ -202,6 +232,7 @@ class SwinAudioCodec(BaseCodec):
                 "raw_feat": x_feat, 
                 "recon_feat": recon_feat,
             }
+    
     @torch.inference_mode()
     def test_one_step(self, x, x_feat, streams):
         self.eval()
@@ -290,7 +321,7 @@ class SwinEncoder(BaseEncoder):
                     depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
                     subsample=None, is_causal=is_causal,
-        )
+        )# tag
 
     def encode(self, x):
         """Step-wise Encoding with downscaling
@@ -301,6 +332,7 @@ class SwinEncoder(BaseEncoder):
         Wh, Ww = x.size(2) // self.patch_size[0], x.size(3) // self.patch_size[1]
         
         x = self.patch_embed(x)
+
         x, Wh, Ww = self.pre_swin(x, Wh, Ww)
         enc_hs = [x]
 
@@ -370,10 +402,15 @@ class BaseCrossScaleDecoder(nn.Module):
             self.pre_fuse, self.post_fuse = self.self_w_attn_pre_fuse, self.self_w_attn_post_fuse
     
     def res_pre_fuse(self, enc, dec, idx=None, pre_fuse_net=None, Wh=None, Ww=None):
-        return enc - dec
+        return pre_fuse_net[idx](enc - dec)
     
-    def res_post_fuse(self, residual_q, dec, idx=None, post_fuse_net=None, Wh=None, Ww=None):
-        return residual_q + dec
+    def res_post_fuse(self, residual_q, dec, idx=None, post_fuse_net=None, Wh=None, Ww=None, transmit=True):
+        if not transmit: 
+            mask = (
+                torch.full((dec.shape[0],), fill_value=False, device=dec.device)
+            )
+            residual_q *= mask[:, None, None]
+        return post_fuse_net[idx](residual_q + dec)
     
     def cross_w_attn_pre_fuse(self, enc, dec, idx, pre_fuse_net, Wh=None, Ww=None):
         """enc/dec shape: [B, F*T, C]"""
@@ -419,11 +456,17 @@ class BaseCrossScaleDecoder(nn.Module):
                    pre_fuse_net: nn.ModuleList = None, 
                    post_fuse_net: nn.ModuleList = None, 
                    Wh: int = None, 
-                   Ww: int = None):
+                   Ww: int = None,
+                   transmit: bool=True):
         # Quantization Forward that combines quantize and dequantize
         residual = self.pre_fuse(enc, dec, idx, pre_fuse_net, Wh, Ww)
         residual_q, cm_loss, cb_loss = vq(residual)
-        dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, Wh, Ww)
+        dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, Wh, Ww, transmit)
+
+        if not transmit:
+            mask = torch.full((dec.shape[0],), fill_value=False, device=dec.device)
+            cm_loss *= mask
+            cb_loss *= mask
 
         return dec_refine, cm_loss, cb_loss
     
@@ -478,8 +521,15 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                                         mlp_ratio=mlp_ratio, is_causal=is_causal, shift_wa=True)
         
         elif self.fuse_net == "None":
-            pre_fuse_net = None
-            post_fuse_net = None
+            pre_fuse_net = nn.ModuleList([nn.Identity() for _ in range(max_streams-1)])
+            post_fuse_net = nn.ModuleList([nn.Identity() for _ in range(max_streams-1)])
+
+            # pre_fuse_net = nn.ModuleList([
+            #     nn.LayerNorm(h_dims[i]) for i in range(max_streams-1) 
+            # ])
+            # post_fuse_net = nn.ModuleList([
+            #     nn.LayerNorm(h_dims[i]) for i in range(max_streams-1) 
+            # ])
 
         else:
             raise ValueError("fuse_net method must be in [cross_w_merge, cross_sw_merge, self_w_merge, self_sw_merge]")
@@ -491,7 +541,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                     depth=swin_depth, num_heads=swin_heads[0],
                     window_size=window_size, mlp_ratio=mlp_ratio,
                     subsample=None, is_causal=is_causal
-        )
+        )# tag
 
     def decode(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
         """Step-wise Fuse decoding (Combines Quantize and Dequantize for Forward Training)
@@ -507,17 +557,27 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         dec_hs = [z0]
         for i, blk in enumerate(self.blocks):
             transmit = (i < streams-1)    
-            if transmit:
+            if self.training:
                 dec_i_refine, cm_loss_i, cb_loss_i = self.csvq_layer(
-                                                        enc=enc_hs[-1-i], dec=dec_hs[i],
-                                                        idx=i, vq=vqs[i+1], 
-                                                        pre_fuse_net=self.pre_fuse_net,
-                                                        post_fuse_net=self.post_fuse_net,
-                                                        Wh=Wh, Ww=Ww)
+                                                    enc=enc_hs[-1-i], dec=dec_hs[i],
+                                                    idx=i, vq=vqs[i+1], 
+                                                    pre_fuse_net=self.pre_fuse_net,
+                                                    post_fuse_net=self.post_fuse_net,
+                                                    Wh=Wh, Ww=Ww, transmit=transmit)
                 cm_loss += cm_loss_i
                 cb_loss += cb_loss_i
             else:
-                dec_i_refine = dec_hs[i]
+                if transmit:
+                    dec_i_refine, cm_loss_i, cb_loss_i = self.csvq_layer(
+                                                            enc=enc_hs[-1-i], dec=dec_hs[i],
+                                                            idx=i, vq=vqs[i+1], 
+                                                            pre_fuse_net=self.pre_fuse_net,
+                                                            post_fuse_net=self.post_fuse_net,
+                                                            Wh=Wh, Ww=Ww)
+                    cm_loss += cm_loss_i
+                    cb_loss += cb_loss_i
+                else:
+                    dec_i_refine = dec_hs[i]
             
             dec_next, Wh, Ww = blk(dec_i_refine, Wh, Ww)
             dec_hs.append(dec_next)
@@ -704,36 +764,47 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
             ))
 
 if __name__ == "__main__":
-
-    model = SwinAudioCodec(
-        h_dims=[45,72,96,144,192,384],
-        swin_heads=[3,6,12,24,24],
-        codebook_dims=8,
-        num_vqs=6,
-        fuse_net="None",#"cross_w_merge",
-        scalable=True,
-        max_streams=6,
-        # proj_ratio=.5,
-        use_cosine_sim=True,
-        use_ema=False,
+    import os, yaml
+    from utils import dict2namespace
+    with open(os.path.join('src/configs', 'swin_large.yml'), 'r') as f:
+        config = yaml.safe_load(f)
+    config = dict2namespace(config)
+    model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
+                               config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
+                               config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
+                               config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
+                               config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, 
+                               config.model.is_causal, config.model.use_rvq, config.model.fuse_net, config.model.scalable, False,
+                               config.model.mel_windows, config.model.mel_bins, config.model.win_len,
+                               config.model.hop_len, config.model.sr, vis=True)
+    trainable_params = sum(
+	p.numel() for p in model.parameters() if p.requires_grad
     )
+    print(trainable_params)
 
-    # model = SwinAudioCodec(
-    #     h_dims=[45,45,72,96,192,384],
-    #     swin_heads=[3,3,6,12,24],
-    #     codebook_dims=[8],
-    #     num_vqs=6,
-    #     fuse_net="None",#"cross_w_merge",
-    #     scalable=False,
-    #     max_streams=6,
-    # )
+    x_feat_ = torch.ones(2,2,192,600)
+    enc_hs, Wh, Ww = model.encoder.encode(x_feat_)
+    for i in range(len(enc_hs)):
+        print(enc_hs[i].shape)
+    
+    # model.train()
+    # recon_feat, _, cm_loss, cb_loss, dec_refines = model.decoder.decode(enc_hs, 2, vqs=model.quantizer, Wh=Wh, Ww=Ww)
+    # model.eval()
+    # recon_feat_, _, cm_loss_, cb_loss_, dec_refines_ = model.decoder.decode(enc_hs, 2, vqs=model.quantizer, Wh=Wh, Ww=Ww)
+
+    # print((recon_feat_-recon_feat).sum(), (cm_loss-cm_loss_).sum(), (cb_loss-cb_loss_).sum())
+
+    # for i in range(len(dec_refines)):
+    #     print(i, (dec_refines_[i]-dec_refines[i]).sum())
 
     outputs = model.train_one_step(x=torch.ones(2,47920),
                          x_feat=torch.randn(2,192,600,2),
                          streams=5)
     print(outputs["recon_loss"])
 
-    # codes, _ = model.encode(x=torch.ones(2, 47920), num_streams=5)
+    # codes, _ = model.encode(x=torch.ones(2, 47920), num_streams=6)
     # print(len(codes), codes[0].shape)
 
-    # print(model.decode(codes, enc_feat_size=(2, 300)))
+    # print(model.decode(codes, enc_feat_size=(1, 150)))
+        
+        
