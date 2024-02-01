@@ -65,16 +65,17 @@ class Trainer:
         output["loss"] = self.config.loss.recon_factor * output["recon_loss"] + \
                             self.config.loss.commitment_factor * output["commitment_loss"] + \
                                 self.config.loss.codebook_factor * output["codebook_loss"] + \
-                                    self.config.loss.mel_factor * output["mel_loss"]
+                                    self.config.loss.mel_factor * output["mel_loss"] + \
+                                        self.config.loss.reg_factor * output["kl_loss"]
         self.optimizer.zero_grad()
         self.accel.backward(output["loss"].mean())
-        self.accel.clip_grad_norm_(self.generator.parameters(), 6.0)
+        self.accel.clip_grad_norm_(self.generator.parameters(), 0.5)
         self.optimizer.step()
         self.scheduler.step()
 
         if self.evaluation is None:
             self.evaluation = {k: [] for k in output.keys() if k in ["loss", "recon_loss", 
-                                                                     "commitment_loss", "codebook_loss", "mel_loss",
+                                                                     "commitment_loss", "codebook_loss", "mel_loss", "kl_loss",
                                                                      ]}
         for key, _ in self.evaluation.items():
             self.evaluation[key].append(output[key].mean().item())

@@ -31,8 +31,6 @@ class MelDistance(nn.Module):
         for mel_trans in self.mel_transf:
             x_mels, y_mels = mel_trans(raw_audio), mel_trans(recon_audio)
 
-            # mel_loss += F.l1_loss(x_mels, y_mels, reduction="none").mean([1,2]) # megnitude loss
-
             mel_loss += F.l1_loss(  # log mel loss
                 x_mels.clamp(self.clamp_eps).pow(2).log10(),
                 y_mels.clamp(self.clamp_eps).pow(2).log10(), 
@@ -123,7 +121,6 @@ class SISDRLoss(nn.Module):
             sdr = torch.clamp(sdr, min=self.clip_min)
 
         return sdr.squeeze(1)
-        
 
 class PESQ:      
     def __init__(self, sample_rate, device="cpu") -> None:
@@ -155,6 +152,64 @@ class PESQ:
 class ViSQOL:
     def __init__(self) -> None:
         pass
+
+class STFTDistance(nn.Module):
+
+    def __init__(
+        self,
+        window_lengths: List[int] = [2048, 512],
+        loss_fn: typing.Callable = nn.L1Loss(),
+        clamp_eps: float = 1e-5,
+        mag_weight: float = 1.0,
+        log_weight: float = 1.0,
+        pow: float = 2.0,
+        weight: float = 1.0,
+        match_stride: bool = False,
+        window_type: str = None,
+    ):
+        super().__init__()
+        self.stft_params = [
+            STFTParams(
+                window_length=w,
+                hop_length=w // 4,
+                match_stride=match_stride,
+                window_type=window_type,
+            )
+            for w in window_lengths
+        ]
+        self.loss_fn = loss_fn
+        self.log_weight = log_weight
+        self.mag_weight = mag_weight
+        self.clamp_eps = clamp_eps
+        self.weight = weight
+        self.pow = pow
+
+    def forward(self, x: AudioSignal, y: AudioSignal):
+        """Computes multi-scale STFT between an estimate and a reference
+        signal.
+
+        Parameters
+        ----------
+        x : AudioSignal
+            Estimate signal
+        y : AudioSignal
+            Reference signal
+
+        Returns
+        -------
+        torch.Tensor
+            Multi-scale STFT loss.
+        """
+        loss = 0.0
+        for s in self.stft_params:
+            x.stft(s.window_length, s.hop_length, s.window_type)
+            y.stft(s.window_length, s.hop_length, s.window_type)
+            loss += self.log_weight * self.loss_fn(
+                x.magnitude.clamp(self.clamp_eps).pow(self.pow).log10(),
+                y.magnitude.clamp(self.clamp_eps).pow(self.pow).log10(),
+            )
+            loss += self.mag_weight * self.loss_fn(x.magnitude, y.magnitude)
+        return loss
 
 class Resampler:
     def __init__(self, sample_rate, 

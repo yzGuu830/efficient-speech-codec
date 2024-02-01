@@ -1,7 +1,11 @@
 import torch
 import torch.nn as nn
 from einops import rearrange
-from models.vq.codebook import Codebook, CodebookEMA
+from models.vq.codebook import Codebook, CodebookEMA, count_posterior
+from models.losses.generator import KLDivergenceLoss
+
+
+kl_loss_fc = KLDivergenceLoss(prior="uniform")
 
 class ResidualVQ(nn.Module):
     def __init__(self, 
@@ -145,33 +149,37 @@ class GroupVQ(nn.Module):
                                         ) 
                                     for in_dim in self.vq_dims
                                 ]) 
-                
+        
+        self.codebook_size = codebook_size
+
     def forward(self, z):
         
         dim = z.dim()
 
         z = self.pre_process(z)
-        z_q, codebook_loss, commitment_loss = [], \
-            torch.zeros(z.size(0), device=z.device), \
-                torch.zeros(z.size(0), device=z.device)
+        z_q, codebook_loss, commitment_loss, kl_loss = [], 0, 0, 0
 
         s_idx = 0
         for i in range(len(self.vq_dims)):
             e_idx = s_idx + self.vq_dims[i]
             z_i = z[:, :, s_idx:e_idx]
 
-            z_q_i, cm_loss, cb_loss, _ = self.vqs[i](z_i)
+            z_q_i, cm_loss, cb_loss, code = self.vqs[i](z_i)
+
+            posterior = count_posterior(code, self.codebook_size)
+            kl = kl_loss_fc(posterior)
 
             z_q.append(z_q_i)
             commitment_loss += cm_loss
             codebook_loss += cb_loss
+            kl_loss += kl
 
             s_idx = e_idx
         
         z_q = torch.cat(z_q, dim=-1)
         z_q_ = self.post_process(z_q, dim=dim)
 
-        return z_q_, commitment_loss/len(self.vq_dims), codebook_loss/len(self.vq_dims)
+        return z_q_, commitment_loss/len(self.vq_dims), codebook_loss/len(self.vq_dims), kl_loss/len(self.vq_dims)
 
     def pre_process(self, z):
         """

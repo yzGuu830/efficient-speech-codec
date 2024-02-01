@@ -23,6 +23,7 @@ model:
     use_ema: False
     use_cosine_sim: True
     is_causal: False
+    use_rvq: False
     fuse_net: "None"
     scalable: True
     mel_windows: [32,64,128,256,512,1024,2048]

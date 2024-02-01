@@ -216,7 +216,7 @@ class SwinAudioCodec(BaseCodec):
         #     x_feat_[:, 1, :, :] = self.freq_augment(x_feat_[:, 1, :, :])
 
         enc_hs, Wh, Ww = self.encoder.encode(x_feat)
-        recon_feat, _, cm_loss, cb_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+        recon_feat, _, cm_loss, cb_loss, kl_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
         rec_x = self.audio_reconstruct(recon_feat)
 
         recon_loss = self.recon_loss(x_feat, recon_feat)
@@ -227,6 +227,7 @@ class SwinAudioCodec(BaseCodec):
                 "commitment_loss": cm_loss,
                 "codebook_loss": cb_loss,
                 "mel_loss": mel_loss,
+                "kl_loss": kl_loss,
                 "raw_audio": x,
                 "recon_audio": rec_x,
                 "raw_feat": x_feat, 
@@ -243,7 +244,7 @@ class SwinAudioCodec(BaseCodec):
 
         enc_hs, Wh, Ww = self.encoder.encode(x_feat)
 
-        recon_feat, _, _, _ = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+        recon_feat, _, cm_loss, cb_loss, kl_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
 
         rec_x = self.audio_reconstruct(recon_feat)
 
@@ -460,15 +461,16 @@ class BaseCrossScaleDecoder(nn.Module):
                    transmit: bool=True):
         # Quantization Forward that combines quantize and dequantize
         residual = self.pre_fuse(enc, dec, idx, pre_fuse_net, Wh, Ww)
-        residual_q, cm_loss, cb_loss = vq(residual)
+        residual_q, cm_loss, cb_loss, kl_loss = vq(residual)
         dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, Wh, Ww, transmit)
 
         if not transmit:
             mask = torch.full((dec.shape[0],), fill_value=False, device=dec.device)
             cm_loss *= mask
             cb_loss *= mask
+            kl_loss *= mask
 
-        return dec_refine, cm_loss, cb_loss
+        return dec_refine, cm_loss, cb_loss, kl_loss
     
     def csvq_quantize(self, enc, dec, idx, vq, pre_fuse_net, Wh:int, Ww:int):
 
@@ -553,12 +555,12 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
 
-        z0, cm_loss, cb_loss = vqs[0](enc_hs[-1])
+        z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
         dec_hs = [z0]
         for i, blk in enumerate(self.blocks):
             transmit = (i < streams-1)    
             if self.training:
-                dec_i_refine, cm_loss_i, cb_loss_i = self.csvq_layer(
+                dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i = self.csvq_layer(
                                                     enc=enc_hs[-1-i], dec=dec_hs[i],
                                                     idx=i, vq=vqs[i+1], 
                                                     pre_fuse_net=self.pre_fuse_net,
@@ -566,9 +568,10 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                                                     Wh=Wh, Ww=Ww, transmit=transmit)
                 cm_loss += cm_loss_i
                 cb_loss += cb_loss_i
+                kl_loss += kl_loss_i
             else:
                 if transmit:
-                    dec_i_refine, cm_loss_i, cb_loss_i = self.csvq_layer(
+                    dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i = self.csvq_layer(
                                                             enc=enc_hs[-1-i], dec=dec_hs[i],
                                                             idx=i, vq=vqs[i+1], 
                                                             pre_fuse_net=self.pre_fuse_net,
@@ -576,6 +579,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                                                             Wh=Wh, Ww=Ww)
                     cm_loss += cm_loss_i
                     cb_loss += cb_loss_i
+                    kl_loss += kl_loss_i
                 else:
                     dec_i_refine = dec_hs[i]
             
@@ -585,7 +589,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         dec_next, Wh, Ww = self.post_swin(dec_next, Wh, Ww)
         recon_feat = self.patch_deembed(dec_next)
 
-        return recon_feat, dec_hs, cm_loss, cb_loss
+        return recon_feat, dec_hs, cm_loss, cb_loss, kl_loss
     
     def quantize(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
         """Step-wise Compression (Quantize to code for Inference)
@@ -766,7 +770,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
 if __name__ == "__main__":
     import os, yaml
     from utils import dict2namespace
-    with open(os.path.join('src/configs', 'swin_large.yml'), 'r') as f:
+    with open(os.path.join('src/configs', 'residual_9k.yml'), 'r') as f:
         config = yaml.safe_load(f)
     config = dict2namespace(config)
     model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
@@ -799,9 +803,12 @@ if __name__ == "__main__":
 
     outputs = model.train_one_step(x=torch.ones(2,47920),
                          x_feat=torch.randn(2,192,600,2),
-                         streams=5)
-    print(outputs["recon_loss"])
+                         streams=6)
 
+    for k, v in outputs.items():
+        if "loss" in k:
+            print(k, v)
+    
     # codes, _ = model.encode(x=torch.ones(2, 47920), num_streams=6)
     # print(len(codes), codes[0].shape)
 
