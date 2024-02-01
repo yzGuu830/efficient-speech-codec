@@ -1,7 +1,7 @@
 import os, torch, wandb, transformers, random, torchaudio
 
 from models.codec import SwinAudioCodec
-from models.losses.metrics import PESQ, MelDistance, SISDRLoss
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR
 from data import make_data_loader, fetch_dataset
 
 import numpy as np

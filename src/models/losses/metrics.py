@@ -197,9 +197,22 @@ class PSNR:
         recon_stft_mag = torch.view_as_complex(recon_feat.permute(0,2,3,1)).abs()
 
         mse = torch.mean((raw_stft_mag - recon_stft_mag) ** 2, dim=[1,2])
-        psnr = 10 * torch.log10(self.max_val ** 2 / mse)
+        psnr = 10 * torch.log10(self.max_val ** 2 / mse + 1e-8)
         return psnr
-    
+
+class SNR:
+    "Signal-to-noise ratio on Audio"
+    def __init__(self) -> None:
+        pass    
+
+    def __call__(self, raw_audio, recon_audio):
+        noise = recon_audio - raw_audio
+
+        signal_power = torch.mean(raw_audio ** 2, dim=-1)
+        noise_power = torch.mean(noise ** 2, dim=-1)
+
+        snr = 10 * torch.log10(signal_power / noise_power + 1e-10)
+        return snr
 
 class Resampler:
     def __init__(self, sample_rate, 
