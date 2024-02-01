@@ -32,8 +32,8 @@ class Trainer:
         self.best_perf = None
         self.progress_bar = None
         self.obj_metric = {"Test_PESQ": PESQ(sample_rate=16000, device=self.accel.device),
-                           "Test_MelDist": MelDistance(win_lengths=[32,64,128,256,512,1024,2048], n_mels=[5,10,20,40,80,160,320]),
-                           "Test_STFTDist": STFTDistance(win_lengths=[2048,512]),
+                           "Test_MelDist": MelDistance(win_lengths=[32,64,128,256,512,1024,2048], n_mels=[5,10,20,40,80,160,320]).to(self.accel.device),
+                           "Test_STFTDist": STFTDistance(win_lengths=[2048,512]).to(self.accel.device),
                            "Test_PSNR": PSNR(), "Test_SNR":SNR()}
 
         if args.eval_every == "epoch":
@@ -122,7 +122,7 @@ class Trainer:
 
     def _log_test_batch(self):
         test_performance = {}
-        for k, v in self.cumm_metric:
+        for k, v in self.cumm_metric.items():
             test_performance[k] = np.mean(v)
         if wandb.run is not None:
             wandb.log(test_performance)

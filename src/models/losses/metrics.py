@@ -43,11 +43,11 @@ class STFTDistance(nn.Module):
         clamp_eps: float = 1e-5,
     ):
         super().__init__()
-        self.stft_transf = [
+        self.stft_transf = nn.ModuleList( [
             torchaudio.transforms.Spectrogram(
                     n_fft=w, win_length=w, hop_length=w//4, power=1,)
             for w in win_lengths
-        ]
+        ] )
         self.clamp_eps = clamp_eps
 
     def forward(self, raw_audio, recon_audio):
@@ -58,7 +58,7 @@ class STFTDistance(nn.Module):
             x_stft_mag = stft_trans(raw_audio)
             y_stft_mag = stft_trans(recon_audio)
             
-            stft_loss += self.log_weight * F.l1_loss(    # log stft loss
+            stft_loss += F.l1_loss(    # log stft loss
                 x_stft_mag.clamp(self.clamp_eps).pow(2).log10(),
                 y_stft_mag.clamp(self.clamp_eps).pow(2).log10(),
                 reduction="none"
