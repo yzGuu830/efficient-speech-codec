@@ -770,7 +770,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
 if __name__ == "__main__":
     import os, yaml
     from utils import dict2namespace
-    with open(os.path.join('src/configs', 'residual_9k.yml'), 'r') as f:
+    with open(os.path.join('src/configs', 'residual_9k_vq_ema.yml'), 'r') as f:
         config = yaml.safe_load(f)
     config = dict2namespace(config)
     model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,

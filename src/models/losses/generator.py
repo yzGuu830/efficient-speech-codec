@@ -44,7 +44,7 @@ class KLDivergenceLoss(nn.Module):
         if self.prior == "uniform":
             # minimize KL between uniform prior and posterior is equivalent 
             # to minimize negative entropy -> maximize entropy
-            entropy = (-posterior * ((posterior+self.eps).log())).sum(dim=-1)
+            entropy = (-posterior * ((posterior+self.eps).log2())).sum(dim=-1)
             kl = -entropy
 
         return kl
