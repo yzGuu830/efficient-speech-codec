@@ -76,8 +76,7 @@ class MELLoss(nn.Module):
         for mel_trans in self.mel_transf:
             x_mels, y_mels = mel_trans(raw_audio), mel_trans(recon_audio)
 
-            # mel_loss += F.l1_loss(x_mels, y_mels, reduction="none").mean([1,2]) # magnitude loss
-
+            mel_loss += F.l1_loss(x_mels, y_mels, reduction="none").mean([1,2]) # magnitude loss
             mel_loss += F.l1_loss(  # log mel loss
                 x_mels.clamp(self.clamp_eps).pow(2).log10(),
                 y_mels.clamp(self.clamp_eps).pow(2).log10(), 

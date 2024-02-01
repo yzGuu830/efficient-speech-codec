@@ -1,3 +1,4 @@
+from typing import Any
 import torch.nn as nn
 import torch, torchaudio
 import torch.nn.functional as F
@@ -6,22 +7,18 @@ from pesq import pesq
 
 class MelDistance(nn.Module):
     def __init__(self, 
-                 win_lengths=[32, 64, 128, 256, 512, 1024, 2048], 
-                 n_mels=[5, 10, 20, 40, 80, 160, 320], 
+                 win_lengths=[32,64,128,256,512,1024,2048], 
+                 n_mels=[5,10,20,40,80,160,320], 
                  clamp_eps=1e-5,):
         super().__init__()
 
         self.n_mels = n_mels
         self.mel_transf = nn.ModuleList( [
             torchaudio.transforms.MelSpectrogram(sample_rate=16000,
-                                                 n_fft=w,
-                                                 win_length=w, 
-                                                 hop_length=w//4, 
-                                                 n_mels=n_mels[i],
-                                                 power=1)
+                                                 n_fft=w, win_length=w, hop_length=w//4, 
+                                                 n_mels=n_mels[i], power=1)
             for i, w in enumerate(win_lengths)
         ] )
-
         self.clamp_eps = clamp_eps
 
     def forward(self, raw_audio, recon_audio):
@@ -38,7 +35,38 @@ class MelDistance(nn.Module):
             ).mean(dim=[1,2])
 
         return mel_loss
+    
+class STFTDistance(nn.Module):
+    def __init__(
+        self,
+        win_lengths: list = [2048, 512],
+        clamp_eps: float = 1e-5,
+    ):
+        super().__init__()
+        self.stft_transf = [
+            torchaudio.transforms.Spectrogram(sample_rate=16000,
+                                              n_fft=w, win_length=w, hop_length=w//4,
+                                              power=1,)
+            for w in win_lengths
+        ]
+        self.clamp_eps = clamp_eps
 
+    def forward(self, raw_audio, recon_audio):
+        assert raw_audio.size() == recon_audio.size()
+
+        stft_loss = 0.0
+        for stft_trans in self.stft_transf:
+            x_stft_mag = stft_trans(raw_audio)
+            y_stft_mag = stft_trans(recon_audio)
+            
+            stft_loss += self.log_weight * F.l1_loss(    # log stft loss
+                x_stft_mag.clamp(self.clamp_eps).pow(2).log10(),
+                y_stft_mag.clamp(self.clamp_eps).pow(2).log10(),
+                reduction="none"
+            ).mean(dim=[1,2])
+
+        return stft_loss
+    
 class SISDRLoss(nn.Module):
     """
     Computes the Scale-Invariant Source-to-Distortion Ratio between a batch
@@ -153,63 +181,25 @@ class ViSQOL:
     def __init__(self) -> None:
         pass
 
-class STFTDistance(nn.Module):
+class PSNR:
+    """Peak signal-to-noise ratio on STFT complex spectrum (magnitude)"""
+    def __init__(self) -> None:
+        
+        self.max_val = 1.0
 
-    def __init__(
-        self,
-        window_lengths: List[int] = [2048, 512],
-        loss_fn: typing.Callable = nn.L1Loss(),
-        clamp_eps: float = 1e-5,
-        mag_weight: float = 1.0,
-        log_weight: float = 1.0,
-        pow: float = 2.0,
-        weight: float = 1.0,
-        match_stride: bool = False,
-        window_type: str = None,
-    ):
-        super().__init__()
-        self.stft_params = [
-            STFTParams(
-                window_length=w,
-                hop_length=w // 4,
-                match_stride=match_stride,
-                window_type=window_type,
-            )
-            for w in window_lengths
-        ]
-        self.loss_fn = loss_fn
-        self.log_weight = log_weight
-        self.mag_weight = mag_weight
-        self.clamp_eps = clamp_eps
-        self.weight = weight
-        self.pow = pow
-
-    def forward(self, x: AudioSignal, y: AudioSignal):
-        """Computes multi-scale STFT between an estimate and a reference
-        signal.
-
-        Parameters
-        ----------
-        x : AudioSignal
-            Estimate signal
-        y : AudioSignal
-            Reference signal
-
-        Returns
-        -------
-        torch.Tensor
-            Multi-scale STFT loss.
+    def __call__(self, raw_feat, recon_feat):
         """
-        loss = 0.0
-        for s in self.stft_params:
-            x.stft(s.window_length, s.hop_length, s.window_type)
-            y.stft(s.window_length, s.hop_length, s.window_type)
-            loss += self.log_weight * self.loss_fn(
-                x.magnitude.clamp(self.clamp_eps).pow(self.pow).log10(),
-                y.magnitude.clamp(self.clamp_eps).pow(self.pow).log10(),
-            )
-            loss += self.mag_weight * self.loss_fn(x.magnitude, y.magnitude)
-        return loss
+            Args: 
+                raw_feat/recon_feat: [B, 2, F, T]
+                returns: psnr [B,]
+        """
+        raw_stft_mag = torch.view_as_complex(raw_feat.permute(0,2,3,1)).abs()
+        recon_stft_mag = torch.view_as_complex(recon_feat.permute(0,2,3,1)).abs()
+
+        mse = torch.mean((raw_stft_mag - recon_stft_mag) ** 2, dim=[1,2])
+        psnr = 10 * torch.log10(self.max_val ** 2 / mse)
+        return psnr
+    
 
 class Resampler:
     def __init__(self, sample_rate, 
