@@ -20,6 +20,8 @@ def parse_args_and_config():
     parser.add_argument("--save_dir", type=str, default="/root/autodl-tmp/output")
     parser.add_argument("--adv_training", action="store_true")
     parser.add_argument("--q_dropout_rate", type=float, default=1.0)
+    parser.add_argument("--warmup_training", action="store_true")
+    parser.add_argument("--from_warmup", type=str, default=None)
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--trans_on_cpu", action="store_true")
     parser.add_argument("--save_steps", nargs="+", type=int, default=[10000, 50000, 100000, 200000])

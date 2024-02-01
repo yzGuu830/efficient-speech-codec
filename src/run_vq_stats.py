@@ -38,7 +38,7 @@ def count_codebook_stats(model, dl, max_streams=5, num_vq=6, codebook_size=1024,
         usage[key] = percentage_used
     
         index_probs = val.float() / vq_total_counts[key]
-        entropy[key] = -(index_probs * torch.log(index_probs + 1e-10)).sum().item()
+        entropy[key] = -(index_probs * torch.log2(index_probs + 1e-10)).sum().item()
 
     return entropy, usage
 
@@ -84,7 +84,7 @@ def run(args, config):
     data_loaders = make_data_loader(datasets, 
                                     batch_size={"train": 20, "test": 16}, 
                                     shuffle={"train": False, "test": False}, 
-                                    sampler={"train": None, "test": None}, 
+                                    sampler=None, 
                                     num_workers=args.num_worker)
 
     entropy, usage = count_codebook_stats(

@@ -555,7 +555,10 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
 
-        z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
+        if streams == 0:
+            z0, cm_loss, cb_loss, kl_loss = enc_hs[-1], 0, 0, 0
+        else:
+            z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
         dec_hs = [z0]
         for i, blk in enumerate(self.blocks):
             transmit = (i < streams-1)    
@@ -770,7 +773,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
 if __name__ == "__main__":
     import os, yaml
     from utils import dict2namespace
-    with open(os.path.join('src/configs', 'residual_9k_vq_ema.yml'), 'r') as f:
+    with open(os.path.join('src/configs', 'residual_9k_warmup.yml'), 'r') as f:
         config = yaml.safe_load(f)
     config = dict2namespace(config)
     model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
@@ -786,10 +789,10 @@ if __name__ == "__main__":
     )
     print(trainable_params)
 
-    x_feat_ = torch.ones(2,2,192,600)
-    enc_hs, Wh, Ww = model.encoder.encode(x_feat_)
-    for i in range(len(enc_hs)):
-        print(enc_hs[i].shape)
+    # x_feat_ = torch.ones(2,2,192,600)
+    # enc_hs, Wh, Ww = model.encoder.encode(x_feat_)
+    # for i in range(len(enc_hs)):
+    #     print(enc_hs[i].shape)
     
     # model.train()
     # recon_feat, _, cm_loss, cb_loss, dec_refines = model.decoder.decode(enc_hs, 2, vqs=model.quantizer, Wh=Wh, Ww=Ww)
@@ -803,7 +806,7 @@ if __name__ == "__main__":
 
     outputs = model.train_one_step(x=torch.ones(2,47920),
                          x_feat=torch.randn(2,192,600,2),
-                         streams=6)
+                         streams=0)
 
     for k, v in outputs.items():
         if "loss" in k:

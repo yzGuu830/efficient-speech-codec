@@ -35,29 +35,30 @@ class ResidualVQ(nn.Module):
                                         ) 
                                     for in_dim in self.vq_dims
                                 ]) 
-        
+        self.codebook_size = codebook_size
     def forward(self, z):
 
         dim = z.dim()
 
         z = self.pre_process(z)
-        z_q, codebook_loss, commitment_loss = 0, \
-            torch.zeros(z.size(0), device=z.device), \
-                torch.zeros(z.size(0), device=z.device)
+        z_q, codebook_loss, commitment_loss, kl_loss = 0, 0, 0, 0
         
         residual = z
         for i, quantizer in enumerate(self.vqs):
 
-            z_q_i, cm_loss, cb_loss, _ = quantizer(residual)
+            z_q_i, cm_loss, cb_loss, code = quantizer(residual)
 
             z_q = z_q + z_q_i
             residual = residual - z_q_i
 
             commitment_loss += cm_loss
             codebook_loss += cb_loss
+            posterior = count_posterior(code, self.codebook_size)
+            kl = kl_loss_fc(posterior)
+            kl_loss += kl
 
         z_q_ = self.post_process(z_q, dim=dim)
-        return z_q_, commitment_loss, codebook_loss
+        return z_q_, commitment_loss, codebook_loss, kl_loss/len(self.vqs)
 
     def pre_process(self, z):
         """

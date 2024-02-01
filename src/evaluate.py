@@ -1,7 +1,7 @@
 from models.codec import SwinAudioCodec
 from utils import manage_checkpoint, dict2namespace
 from data import fetch_dataset, make_data_loader
-from models.losses.metrics import PESQ, MelDistance, SISDRLoss
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance
 
 import argparse
 import torch, json, os, yaml
@@ -57,6 +57,7 @@ def eval_multi_scale(args, config):
         zero_mean=True, clip_min=None, weight=1.0,
     )
     pesq_metric = PESQ(sample_rate=16000, device=args.device)
+    stft_metric = STFTDistance().to(args.device)
 
     # Data
     datasets = fetch_dataset("DNS_CHALLENGE", data_dir=config.data.data_dir, in_freq=config.data.in_freq,
@@ -64,14 +65,14 @@ def eval_multi_scale(args, config):
     dls = make_data_loader(datasets, 
                     batch_size={"train": 20, "test": 16}, 
                     shuffle={"train": False, "test": False}, 
-                    sampler={"train": None, "test": None}, 
+                    sampler=None, 
                     num_workers=args.num_worker)
     test_dl = dls["test"]
 
     # Evaluate loop
     performance_table = {}
     for s in range(1, 7):
-        test_perf = {"mel_dist": [], "si-sdr": [], "pesq": []}
+        test_perf = {"mel_dist": [], "si-sdr": [], "pesq": [], "stft_dist": []}
         for i, input in tqdm(enumerate(test_dl), total=len(test_dl), desc=f"Eval at {s*args.bit_per_stream:.2f}kbps"):
             input['audio'], input['feat'] = input['audio'].to(args.device), None
             outputs = codec(**dict(x=input["audio"], x_feat=input["feat"], streams=s, train=False))
@@ -79,6 +80,7 @@ def eval_multi_scale(args, config):
             test_perf["mel_dist"].extend(mel_distance_metric(input["audio"], outputs['recon_audio']).tolist())
             test_perf["si-sdr"].extend(sisdr_metric(input["audio"], outputs['recon_audio']).tolist())
             test_perf["pesq"].extend(pesq_metric(input["audio"], outputs['recon_audio']))
+            test_perf["stft_dist"].extend(stft_metric(input["audio"], outputs['recon_audio']).tolist())
 
         for k, v in test_perf.items():
             test_perf[k] = np.mean(v)

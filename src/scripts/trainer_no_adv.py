@@ -45,7 +45,7 @@ class Trainer:
                 self.eval_every = int(args.eval_every)
             else:
                 raise ValueError("eval_every argument should be int or epoch")
-
+            
     def _train_batch(self, input, i):
         if self.is_scalable:
             if self.args.q_dropout_rate != 1.0:
@@ -58,6 +58,9 @@ class Trainer:
                 streams = np.random.randint(1, self.config.model.max_streams+1)
         else:
             streams = self.config.model.max_streams
+
+        if self.args.warmup_training:
+            streams = 0
 
         output = self.generator(**dict(x=input["audio"], 
                             x_feat=input["feat"] if "feat" in input else None, 
@@ -95,7 +98,7 @@ class Trainer:
         self.generator.eval()
         output = self.generator(**dict(x=input["audio"], 
                             x_feat=input["feat"] if "feat" in input else None, 
-                            streams=self.config.model.max_streams, 
+                            streams=self.config.model.max_streams if not self.warmup_training else 0, 
                             train=False))
         local_obj_metric = {} # metric stats on each device
         for k, m in self.obj_metric.items():
@@ -176,7 +179,7 @@ class Trainer:
                                  total=max_epochs*len(self.train_data), position=0, leave=True,
                                  desc="Training Model")
         for epoch in range(self.start_epoch, max_epochs+1):
-            self._run_epoch(epoch)
+            self._run_epoch(epoch) 
 
     def _save_checkpoint(self, epoch, save_pth):
         """Save accel.prepare(object) checkpoints"""
@@ -202,7 +205,6 @@ class Trainer:
                 new_state_dict[key] = value
         self.accel.unwrap_model(self.generator).load_state_dict(new_state_dict)
 
-
         self.accel.unwrap_model(self.optimizer).load_state_dict(ckp['optimizer_state_dict'])
         self.scheduler.load_state_dict(ckp['scheduler_state_dict'])
         self.best_perf = ckp["best_perf"]
@@ -225,7 +227,18 @@ class Trainer:
                                config.model.is_causal, config.model.use_rvq, config.model.fuse_net, config.model.scalable, args.augment,
                                config.model.mel_windows, config.model.mel_bins, config.model.win_len,
                                config.model.hop_len, config.model.sr, vis=True)
-        optimizer = torch.optim.AdamW(generator.parameters(), lr=args.lr)
+        
+        if self.args.from_warmup is not None:
+            warmup_ckp = torch.load(f"{self.args.from_warmup}/checkpoint.pt", map_location="cpu")["model_state_dict"]
+            generator.load_state_dict(warmup_ckp)
+            print(f"Loaded pre-trained warmup auto-encoder from {self.args.from_warmup}/checkpoint.pt")
+            for param in generator.encoder.parameters():
+                param.requires_grad = False
+            trainable_params = [param for name, param in generator.named_parameters() if 'encoder' not in name]
+            optimizer = torch.optim.AdamW(trainable_params, lr=args.lr)
+            print("Freeze encoder layers!")
+        else:
+            optimizer = torch.optim.AdamW(generator.parameters(), lr=args.lr)
 
         if args.scheduler_type == "constant":
             scheduler = transformers.get_constant_schedule(optimizer)
@@ -264,7 +277,6 @@ class Trainer:
         self.accel.print(f"total_training_steps: {max_train_steps}")
 
         return data_loaders
-
 
 
 def main(args, config):
