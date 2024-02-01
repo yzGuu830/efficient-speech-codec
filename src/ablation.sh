@@ -83,23 +83,23 @@ accelerate launch main.py \
     --train_bs_per_device 9 \
     --test_bs_per_device 20 \
     --num_device 4 \
-    --q_dropout_rate .5 \
     --parallel accel \
     --num_worker 32
 
 accelerate launch main.py \
     --config residual_9k.yml \
     --seed 53 \
-    --wb_exp_name swin-9k-residual-reproduce \
+    --wb_exp_name swin-9k-residual-dropout-plaw \
     --wb_project_name Neural_Speech_Coding \
     --num_epochs 50 \
     --lr 1.0e-4 \
-    --train_bs_per_device 10 \
+    --train_bs_per_device 9 \
     --test_bs_per_device 20 \
     --num_device 4 \
     --q_dropout_rate .5 \
     --parallel accel \
-    --num_worker 32
+    --num_worker 36
+
 
 # 9k w Norm w dropout [bs=40,different setting]
 accelerate launch main.py \

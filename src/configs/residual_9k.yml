@@ -37,4 +37,4 @@ loss:
     commitment_factor: .25
     codebook_factor: 1.0
     mel_factor: .25
-    kl_factor: 0.0
+    reg_factor: 0.0

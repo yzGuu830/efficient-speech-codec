@@ -44,9 +44,8 @@ class STFTDistance(nn.Module):
     ):
         super().__init__()
         self.stft_transf = [
-            torchaudio.transforms.Spectrogram(sample_rate=16000,
-                                              n_fft=w, win_length=w, hop_length=w//4,
-                                              power=1,)
+            torchaudio.transforms.Spectrogram(
+                    n_fft=w, win_length=w, hop_length=w//4, power=1,)
             for w in win_lengths
         ]
         self.clamp_eps = clamp_eps
