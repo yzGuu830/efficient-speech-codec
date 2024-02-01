@@ -58,7 +58,7 @@ class BaseCodec(nn.Module):
         self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
         
         self.mel_loss = MELLoss(mel_windows, mel_bins)
-        self.recon_loss = L2Loss()
+        self.recon_loss = L2Loss(power_law=True)
         
     def init_quantizer(self, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, 
                        patch_size=None, use_ema=True, use_cosine_sim=False, use_rvq=False):

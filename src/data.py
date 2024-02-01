@@ -11,8 +11,6 @@ from torchaudio.functional import dcshift
 from glob import glob
 from tqdm import tqdm
 
-from random import shuffle
-random.seed(1234)
 
 STATS = {"mean": torch.tensor([5.24824317835737e-05, 
                               -3.034410056557135e-08]), 
@@ -60,7 +58,6 @@ class DNS_CHALLENGE(Dataset):
             self.download_and_process(data_dir, split)
 
         self.source_audio = glob(f"{d_pth}/*/*.wav") # all wav paths
-        shuffle(self.source_audio)
         self.source_audio = self.source_audio[:180000] if split == "train" else self.source_audio
         self.trans_on_cpu = trans_on_cpu
 
@@ -73,8 +70,6 @@ class DNS_CHALLENGE(Dataset):
                 }
         if self.trans_on_cpu:
             input['feat'] = torch.view_as_real(self.feat_trans(input['audio'])) # [F=nfft//2-1, T=600, 2]
-            # m, std = STATS["mean"], STATS["std"]
-            # input['feat'] = input['feat'].sub(m).div(std)
 
         return input
 

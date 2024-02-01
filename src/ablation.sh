@@ -1,3 +1,16 @@
+# 18k
+# accelerate launch main.py \
+#     --config residual_18k.yml \
+#     --seed 53 \
+#     --wb_exp_name swin-18k-residual \
+#     --wb_project_name Neural_Speech_Coding \
+#     --num_epochs 50 \
+#     --lr 1.0e-4 \
+#     --train_bs_per_device 12 \
+#     --test_bs_per_device 16 \
+#     --num_device 3 \
+#     --parallel accel \
+#     --num_worker 24
 
 # # 6k w EMA
 # accelerate launch main.py \
@@ -28,21 +41,20 @@
 #     --num_worker 16
 
 
-# # 6k w Norm w dropout
-# accelerate launch main.py \
-#     --config residual_6k.yml \
-#     --seed 53 \
-#     --wb_exp_name swin-6k-residual-dropout \
-#     --wb_project_name Neural_Speech_Coding \
-#     --num_epochs 50 \
-#     --lr 1.0e-4 \
-#     --train_bs_per_device 9 \
-#     --test_bs_per_device 16 \
-#     --num_device 4 \
-#     --q_dropout_rate .75 \
-#     --augment \
-#     --parallel accel \
-#     --num_worker 32
+# 6k w Norm w dropout
+accelerate launch main.py \
+    --config residual_6k.yml \
+    --seed 53 \
+    --wb_exp_name swin-6k-residual-dropout \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 50 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 12 \
+    --test_bs_per_device 16 \
+    --num_device 3 \
+    --q_dropout_rate .5 \
+    --parallel accel \
+    --num_worker 24
 
 
 # # 6k w Norm w GAN
@@ -60,7 +72,6 @@
 #     --adv_training \
 #     --num_worker 16
 
-
 # 9k w Norm
 accelerate launch main.py \
     --config residual_9k.yml \
@@ -70,11 +81,25 @@ accelerate launch main.py \
     --num_epochs 50 \
     --lr 1.0e-4 \
     --train_bs_per_device 9 \
-    --test_bs_per_device 16 \
+    --test_bs_per_device 20 \
     --num_device 4 \
+    --q_dropout_rate .5 \
     --parallel accel \
-    --num_worker 32 \
-    --save_steps 27000 30000 35000 40000 50000 100000 200000
+    --num_worker 32
+
+accelerate launch main.py \
+    --config residual_9k.yml \
+    --seed 53 \
+    --wb_exp_name swin-9k-residual-reproduce \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 50 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 10 \
+    --test_bs_per_device 20 \
+    --num_device 4 \
+    --q_dropout_rate .5 \
+    --parallel accel \
+    --num_worker 32
 
 # 9k w Norm w dropout [bs=40,different setting]
 accelerate launch main.py \
@@ -137,6 +162,8 @@ accelerate launch main.py \
     --parallel accel \
     --adv_training \
     --num_worker 32
+
+accelerate launch main.py \
     --config residual_9k_gan.yml \
     --seed 53 \
     --wb_exp_name swin-9k-residual-gan \

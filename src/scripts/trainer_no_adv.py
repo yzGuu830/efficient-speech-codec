@@ -1,14 +1,14 @@
 import os, torch, wandb, transformers, random, torchaudio
 
 from models.codec import SwinAudioCodec
-from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR
+from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR, SNR
 from data import make_data_loader, fetch_dataset
 
 import numpy as np
 from tqdm import tqdm
 from collections import OrderedDict
 
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator
 
 class Trainer:
     def __init__(self, accel, config, args, ) -> None:
@@ -31,7 +31,10 @@ class Trainer:
         self.evaluation = None
         self.best_perf = None
         self.progress_bar = None
-        self.obj_metric = PESQ(sample_rate=16000, device=self.accel.device)
+        self.obj_metric = {"Test_PESQ": PESQ(sample_rate=16000, device=self.accel.device),
+                           "Test_MelDist": MelDistance(win_lengths=[32,64,128,256,512,1024,2048], n_mels=[5,10,20,40,80,160,320]),
+                           "Test_STFTDist": STFTDistance(win_lengths=[2048,512]),
+                           "Test_PSNR": PSNR(), "Test_SNR":SNR()}
 
         if args.eval_every == "epoch":
             self.eval_every = self.args.train_steps_per_epoch
@@ -94,15 +97,21 @@ class Trainer:
                             x_feat=input["feat"] if "feat" in input else None, 
                             streams=self.config.model.max_streams, 
                             train=False))
-        local_obj_metric = []
-        local_obj_metric.extend(
-            self.obj_metric(input["audio"], output["recon_audio"])
-        )
-        local_obj_metric = self.accel.gather(
-            torch.tensor(local_obj_metric, device=self.accel.device)
-        ).tolist()
+        local_obj_metric = {} # metric stats on each device
+        for k, m in self.obj_metric.items():
+            if k in ['Test_PESQ', 'Test_MelDist', 'Test_STFTDist', 'Test_SNR']:
+                local_obj_metric[k] = m(input["audio"], output["recon_audio"])
+            elif k in ["Test_PSNR"]:
+                local_obj_metric[k] = m(output["raw_feat"], output["recon_feat"])
 
-        self.gathered_metric.extend(local_obj_metric)
+        local_obj_metric_gathered = {} # metric stats gathered from all device
+        for k, v in local_obj_metric.items():
+            local_obj_metric_gathered[k] = self.accel.gather(
+                torch.tensor(v, device=self.accel.device)
+            ).tolist()
+
+        for k, v_g in local_obj_metric_gathered.items(): # cummulate for all batches
+            self.cumm_metric[k].extend(v_g)
 
     def _log_train_batch(self):
         for key, val in self.evaluation.items():
@@ -112,9 +121,11 @@ class Trainer:
         self.evaluation = None
 
     def _log_test_batch(self):
-        test_performance = np.mean(self.gathered_metric)
+        test_performance = {}
+        for k, v in self.cumm_metric:
+            test_performance[k] = np.mean(v)
         if wandb.run is not None:
-            wandb.log({"Test_PESQ": test_performance})
+            wandb.log(test_performance)
         return test_performance 
 
     def _train_epoch(self, epoch):
@@ -129,29 +140,24 @@ class Trainer:
 
     def _test_epoch(self, epoch):
         """Distributed Evaluate"""
-        self.gathered_metric = []
-
+        self.cumm_metric = {k:[] for k in self.obj_metric.keys()}
         if self.accel.is_main_process:
             for _, input in tqdm(enumerate(self.test_data), total=len(self.test_data), desc=f"Eval Epoch {epoch}"): 
-                
                 self._test_batch(input)
         else:
             for _, input in enumerate(self.test_data): 
-                
                 self._test_batch(input)
 
         if self.accel.is_main_process:
             test_performance = self._log_test_batch()
-            self.accel.print(f"Test PESQ: {test_performance:.4f}")
-            if test_performance > self.best_perf:
-                self.best_perf = test_performance
+            self.accel.print(" | ".join(f"{k}: {v:.4f}" for k, v in test_performance.items()))
+            if test_performance["Test_PESQ"] > self.best_perf:
+                self.best_perf = test_performance["Test_PESQ"]
                 self.accel.print(f"Found Best Model at epoch {epoch}")
                 self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/best.pt")
             self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/checkpoint.pt")
 
     def _run_epoch(self, epoch):
-        # b_sz = next(iter(self.train_data))["audio"].size(0)
-        # self.accel.print(f"Epoch {epoch} | Train Batchsize: {b_sz} | Train Steps: {len(self.train_data)}")
         if self.accel.is_main_process:
             self.accel.print(f"---Epoch {epoch} Training---")
         self._train_epoch(epoch)
@@ -263,8 +269,6 @@ class Trainer:
 
 def main(args, config):
 
-    # kwarg = DistributedDataParallelKwargs(find_unused_parameters=True)
-    # accel = Accelerator(kwargs_handlers=[kwarg])
     accel = Accelerator()
     # For Reproducibility
     torch.manual_seed(args.seed)
