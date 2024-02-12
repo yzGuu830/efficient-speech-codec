@@ -1,14 +1,13 @@
-import os, torch, wandb, transformers, random, torchaudio
-
-from models.codec import SwinAudioCodec
-from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR, SNR
+import os, torch, wandb, random, torchaudio
 from data import make_data_loader, fetch_dataset
+from utils import quantization_dropout, calculate_stage_cutoffs, maintain_stage, \
+    make_optimizer, make_scheduler, make_model, make_metrics, switch_stage
 
 import numpy as np
 from tqdm import tqdm
 from collections import OrderedDict
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 
 class Trainer:
     def __init__(self, accel, config, args, ) -> None:
@@ -16,51 +15,24 @@ class Trainer:
         self.args = args
         self.config = config
         self.accel = accel
-
-        # Prepare Dataloaders
-        dls = self.prepare_dataloader(args, config)
-        self.train_data = accel.prepare(dls["train"])
-        self.test_data = accel.prepare(dls["test"])
-
-        generator, optimizer, self.scheduler = self.load_train_objs(config, args)
-        self.is_scalable = generator.scalable
-
-        # Prepare training objects
-        self.generator, self.optimizer = accel.prepare(generator, optimizer)
         
         self.evaluation = None
         self.best_perf = None
         self.progress_bar = None
-        self.obj_metric = {"Test_PESQ": PESQ(sample_rate=16000, device=self.accel.device),
-                           "Test_MelDist": MelDistance(win_lengths=[32,64,128,256,512,1024,2048], n_mels=[5,10,20,40,80,160,320]).to(self.accel.device),
-                           "Test_STFTDist": STFTDistance(win_lengths=[2048,512]).to(self.accel.device),
-                           "Test_PSNR": PSNR(), "Test_SNR":SNR()}
+        self.stage = None
 
-        if args.eval_every == "epoch":
-            self.eval_every = self.args.train_steps_per_epoch
-        else:
-            if isinstance(args.eval_every, int):
-                self.eval_every = args.eval_every
-            elif isinstance(args.eval_every, str):
-                self.eval_every = int(args.eval_every)
-            else:
-                raise ValueError("eval_every argument should be int or epoch")
+        if not os.path.exists(f"{args.save_dir}/{args.wb_exp_name}"):
+            os.makedirs(f"{args.save_dir}/{args.wb_exp_name}")
+        self.accel.print(f"Saving outputs into {args.save_dir}/{args.wb_exp_name}")
             
     def _train_batch(self, input, i):
-        if self.is_scalable:
-            if self.args.q_dropout_rate != 1.0:
-                # Do Random Sample N with probability q_dropout_rate
-                if np.random.choice([0, 1], p=[1-self.args.q_dropout_rate, self.args.q_dropout_rate]): 
-                    streams = np.random.randint(1, self.config.model.max_streams+1)
-                else:
-                    streams = self.config.model.max_streams
-            else:
-                streams = np.random.randint(1, self.config.model.max_streams+1)
-        else:
-            streams = self.config.model.max_streams
+        self.stage = maintain_stage(self.progress_bar.n, self.adap_training_steps)
+        self.progress_bar.set_description(f"Training Model | Stage: {self.stage}")
+        
+        streams = quantization_dropout(self.args.q_dropout_rate, self.config.model.max_streams) \
+            if self.is_scalable else self.config.model.max_streams
 
-        if self.args.warmup_training:
-            streams = 0
+        if self.stage == "warmup":  streams = 0 # During warmup, no quantizers are trained
 
         output = self.generator(**dict(x=input["audio"], 
                             x_feat=input["feat"] if "feat" in input else None, 
@@ -87,12 +59,21 @@ class Trainer:
             self.evaluation[key].append(output[key].mean().item())
 
         self.progress_bar.update(1)
-        if (self.progress_bar.n) in self.args.save_steps:
+        if self.progress_bar.n in self.args.save_steps:
             os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/", exist_ok=True)
             torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/raw_audio_step_{self.progress_bar.n}.wav",
                             input["audio"][0:1].cpu(), 16000)
             torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/recon_audio_step_{self.progress_bar.n}.wav",
                             output["recon_audio"][0:1].cpu(), 16000)
+
+        if self.progress_bar.n == self.adap_training_steps[0]:
+            self.accel.print("Transition from Warmup to Freeze Training")
+            generator, optimizer = switch_stage(self.accel.unwrap_model(self.generator), "warmup->freeze", "AdamW", self.args.lr)
+            self.generator, self.optimizer = self.accel.prepare(generator, optimizer)
+        elif self.progress_bar.n == self.adap_training_steps[1]:
+            self.accel.print("Transition from Freeze to Refine Training")
+            generator, optimizer = switch_stage(self.accel.unwrap_model(self.generator), "freeze->refine", "AdamW", self.args.lr)
+            self.generator, self.optimizer = self.accel.prepare(generator, optimizer)
 
     def _test_batch(self, input):
         self.generator.eval()
@@ -140,7 +121,6 @@ class Trainer:
             if (i+1) % self.args.info_steps == 0 and self.accel.is_main_process:
                 self._log_train_batch()
 
-
     def _test_epoch(self, epoch):
         """Distributed Evaluate"""
         self.cumm_metric = {k:[] for k in self.obj_metric.keys()}
@@ -157,8 +137,8 @@ class Trainer:
             if test_performance["Test_PESQ"] > self.best_perf:
                 self.best_perf = test_performance["Test_PESQ"]
                 self.accel.print(f"Found Best Model at epoch {epoch}")
-                self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/best.pt")
-            self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/checkpoint.pt")
+                self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/best.pt")
+            self._save_checkpoint(epoch, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/checkpoint.pt")
 
     def _run_epoch(self, epoch):
         if self.accel.is_main_process:
@@ -168,23 +148,45 @@ class Trainer:
 
     def train(self, max_epochs: int):
         """main training method"""
+        # Prepare Dataloaders
+        dls = self.prepare_dataloader(self.args, self.config)
+        self.train_data = self.accel.prepare(dls["train"])
+        self.test_data = self.accel.prepare(dls["test"])
+        # Prepare Model Optimizer Scheduler Metrics 
+        generator, optimizer, self.scheduler, self.obj_metric = self.load_train_objs(self.config, self.args)
+        self.generator, self.optimizer = self.accel.prepare(generator, optimizer)
 
-        resumed_checkpoint_pth = f"{self.args.save_dir}/{self.args.wb_exp_name}/checkpoint.pt"
-        if os.path.exists(resumed_checkpoint_pth):
-            self._load_checkpoint(resumed_checkpoint_pth)
+        # Prepare Adap Training
+        self.adap_training_steps = calculate_stage_cutoffs(self.args.max_train_steps, self.args.training_fractions)
+        self.is_scalable = generator.scalable
+        self.accel.print(f"Running Experiment: {self.args.wb_exp_name}")
+        self.accel.print(f"learning_rate: {self.args.lr} | batch_size: {self.args.train_bs_per_device * self.args.num_device} | scalable: {self.is_scalable}")
+        self.accel.print(f"quantize_dropout_rate: {self.args.q_dropout_rate} | augment: {self.args.augment} | num_worker: {self.args.num_worker}")
+        self.accel.print("Number of Training (K)steps for 'warmup' | 'freeze' | 'refine': {}".format(
+            " | ".join([str(round(s*self.args.max_train_steps/1000, 1)) for s in self.args.training_fractions]) ))
+
+        # Resume Training from some Stage
+        if self.args.resume_from in ["warmup", "freeze", "refine"]:
+            resumed_checkpoint_pth = f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.args.resume_from}/checkpoint.pt"
+            if os.path.exists(resumed_checkpoint_pth):
+                print(f"Resume Training from {self.args.resume_from}")
+                self._load_checkpoint(resumed_checkpoint_pth)
+            else:
+                raise ValueError(f"Did not find any pre-trained checkpoints from {resumed_checkpoint_pth}")
         else:
-            self.start_epoch, self.best_perf = 1, -np.inf
+            self.accel.print("Start Adap Training From Scratch")
+            self.start_epoch, self.best_perf = 1, -np.inf            
         
         self.progress_bar = tqdm(initial=(self.start_epoch-1)*len(self.train_data), 
-                                 total=max_epochs*len(self.train_data), position=0, leave=True,
-                                 desc="Training Model")
+                                 total=max_epochs*len(self.train_data), position=0, leave=True)
         for epoch in range(self.start_epoch, max_epochs+1):
             self._run_epoch(epoch) 
 
     def _save_checkpoint(self, epoch, save_pth):
         """Save accel.prepare(object) checkpoints"""
         # self.accel.wait_for_everyone()
-        ckp = {'epoch': epoch, 
+        ckp = {
+            'epoch': epoch, 
             'model_state_dict': self.accel.unwrap_model(self.generator).state_dict(),
             'optimizer_state_dict': self.accel.unwrap_model(self.optimizer).state_dict(), 
             'scheduler_state_dict': self.scheduler.state_dict(),
@@ -214,43 +216,15 @@ class Trainer:
         self.accel.print(f"Previous best PESQ: {self.best_perf}")
 
     def load_train_objs(self, config, args):
-        """Load Model, Optimizer, Scheduler"""
-        if not os.path.exists(f"{args.save_dir}/{args.wb_exp_name}"):
-            os.makedirs(f"{args.save_dir}/{args.wb_exp_name}")
-        self.accel.print(f"Saving outputs into {args.save_dir}/{args.wb_exp_name}")
+        """Load Model, Optimizer, Scheduler, Metrics"""
 
-        generator = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
-                               config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
-                               config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
-                               config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
-                               config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, 
-                               config.model.is_causal, config.model.use_rvq, config.model.fuse_net, config.model.scalable, args.augment,
-                               config.model.mel_windows, config.model.mel_bins, config.model.win_len,
-                               config.model.hop_len, config.model.sr, vis=True)
-        
-        if self.args.from_warmup is not None:
-            warmup_ckp = torch.load(f"{self.args.from_warmup}/checkpoint.pt", map_location="cpu")["model_state_dict"]
-            generator.load_state_dict(warmup_ckp)
-            print(f"Loaded pre-trained warmup auto-encoder from {self.args.from_warmup}/checkpoint.pt")
-            for param in generator.encoder.parameters():
-                param.requires_grad = False
-            trainable_params = [param for name, param in generator.named_parameters() if 'encoder' not in name]
-            optimizer = torch.optim.AdamW(trainable_params, lr=args.lr)
-            print("Freeze encoder layers!")
-        else:
-            optimizer = torch.optim.AdamW(generator.parameters(), lr=args.lr)
+        generator = make_model(config, vis=(self.accel.device=="cuda:0"))
+        params = generator.parameters()
+        optimizer = make_optimizer(params, optimizer_name="AdamW", lr=args.lr)
+        scheduler = make_scheduler(optimizer, args.scheduler_type, total_steps=args.max_train_steps, warmup_steps=args.warmup_steps)
+        metrics = make_metrics(self.accel.device)
 
-        if args.scheduler_type == "constant":
-            scheduler = transformers.get_constant_schedule(optimizer)
-        elif args.scheduler_type == "constant_warmup":
-            scheduler = transformers.get_constant_schedule_with_warmup(optimizer,
-                                            num_warmup_steps=args.warmup_steps) 
-        elif args.scheduler_type == "cosine_warmup":
-            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, 
-                                                        num_warmup_steps=args.warmup_steps, 
-                                                        num_training_steps=args.max_train_steps)
-
-        return generator, optimizer, scheduler
+        return generator, optimizer, scheduler, metrics
 
     def prepare_dataloader(self, args, config):
         """Load Dataloaders"""
@@ -282,6 +256,8 @@ class Trainer:
 def main(args, config):
 
     accel = Accelerator()
+    # kwarg = DistributedDataParallelKwargs(find_unused_parameters=True)
+    # accel = Accelerator(kwargs_handlers=[kwarg])
     # For Reproducibility
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)

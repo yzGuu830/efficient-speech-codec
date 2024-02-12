@@ -91,7 +91,7 @@ class DNS_CHALLENGE(Dataset):
         clip_idx = 0
         for i in tqdm(range(num_audios), desc="saving audio Tensors to wav files"):
             x = file[i]
-            if x.abs().sum() <= 0.001 or x.mean().abs() >= 1e-2: # drop noisy ones
+            if x.abs().sum() <= 0.001: # or x.mean().abs() >= 1e-2: # drop noisy ones
                 print(f"drop {i}th clip")
             else:
                 folder_num = clip_idx // files_per_folder + 1

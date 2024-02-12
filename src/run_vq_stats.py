@@ -102,14 +102,19 @@ def run(args, config):
     print("Entropy: \n", json.dump(entropy, open(f"{args.weight_pth}/vq_stats/{args.split}/entropy.json", "w"), indent=2))
     print("Effective Percentage: \n", json.dump(usage, open(f"{args.weight_pth}/vq_stats/{args.split}/usage.json", "w"), indent=2))
 
-    total = len(usage) * 100
+    total_use = len(usage) * 100
     used_per = 0
     for key, val in usage.items():
         used_per += val
 
-    print(f"Total Used Percentage is {used_per}/{total} = {used_per/total}")
-    print(f"Effective Total Bitrate is {config.model.num_vqs*3*used_per/total:.2f}kbps/{config.model.num_vqs*3}kbps")
-
+    total_entropy = len(entropy) * 10
+    used_entropy = 0
+    for key, val in entropy.items():
+        used_entropy += val
+    
+    print(f"Total Used Percentage is {used_per}/{total_use} = {used_per/total_use}")
+    print(f"Effective Total Bitrate is {config.model.num_vqs*3*used_per/total_use:.2f}kbps/{config.model.num_vqs*3}kbps")
+    print(f"Bitrate Efficiency is {used_entropy}/{total_entropy} = {used_entropy/total_entropy}")
 
 
 

@@ -555,10 +555,11 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
 
+
+        z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
         if streams == 0:
-            z0, cm_loss, cb_loss, kl_loss = enc_hs[-1], 0, 0, 0
-        else:
-            z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
+            z0, cm_loss, cb_loss, kl_loss = enc_hs[-1] + z0*0.0, cm_loss*0.0, cb_loss*0.0, kl_loss*0.0
+
         dec_hs = [z0]
         for i, blk in enumerate(self.blocks):
             transmit = (i < streams-1)    

@@ -9,9 +9,9 @@ accelerate launch main.py \
     --train_bs_per_device 9 \
     --test_bs_per_device 30 \
     --num_device 4 \
-    --warmup_training \ 
     --parallel accel \
-    --num_worker 36
+    --num_worker 36 \
+    --warmup_training
 
 # 9k w Norm
 accelerate launch main.py \
@@ -42,11 +42,43 @@ accelerate launch main.py \
     --parallel accel \
     --num_worker 36
 
-# 9k w Norm w Dropout from warmup [done]
+# 9k w Norm w Dropout from warmup [freeze encoder] [done]
 accelerate launch main.py \
     --config residual_9k.yml \
     --seed 53 \
-    --wb_exp_name swin-9k-residual-dropout-plaw \
+    --wb_exp_name swin-9k-residual-dropout-plaw-freeze \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 50 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 9 \
+    --test_bs_per_device 30 \
+    --num_device 4 \
+    --from_warmup ../output/swin-9k-residual-warmup \
+    --q_dropout_rate .5 \
+    --parallel accel \
+    --freeze_encoder_layers \
+    --num_worker 36
+# refine stage
+accelerate launch main.py \
+    --config residual_9k.yml \
+    --seed 53 \
+    --wb_exp_name swin-9k-residual-dropout-plaw-refine \
+    --wb_project_name Neural_Speech_Coding \
+    --num_epochs 20 \
+    --lr 3.0e-5 \
+    --train_bs_per_device 9 \
+    --test_bs_per_device 30 \
+    --num_device 4 \
+    --from_warmup ../output/swin-9k-residual-dropout-plaw-freeze \
+    --q_dropout_rate .5 \
+    --parallel accel \
+    --num_worker 36
+
+# 9k w Norm w Dropout w Regularization from warmup [done]
+accelerate launch main.py \
+    --config residual_9k_reg.yml \
+    --seed 53 \
+    --wb_exp_name swin-9k-residual-dropout-plaw-freeze-reg \
     --wb_project_name Neural_Speech_Coding \
     --num_epochs 50 \
     --lr 1.0e-4 \

@@ -20,11 +20,10 @@ def parse_args_and_config():
     parser.add_argument("--save_dir", type=str, default="/root/autodl-tmp/output")
     parser.add_argument("--adv_training", action="store_true")
     parser.add_argument("--q_dropout_rate", type=float, default=1.0)
-    parser.add_argument("--warmup_training", action="store_true")
-    parser.add_argument("--from_warmup", type=str, default=None)
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--trans_on_cpu", action="store_true")
-    parser.add_argument("--save_steps", nargs="+", type=int, default=[10000, 50000, 100000, 200000])
+    parser.add_argument("--training_fractions", nargs="+", default=[0.125,0.625,0.25], type=float)
+    parser.add_argument("--save_steps", nargs="+", type=int, default=[50000, 100000, 200000, 250000, 350000, 400000])
 
     # Train & Test
     parser.add_argument("--num_epochs", type=int, default=80)
@@ -36,17 +35,15 @@ def parse_args_and_config():
     parser.add_argument("--scheduler_type", type=str, default="constant")
     parser.add_argument("--warmup_steps", default=0, type=int)
     parser.add_argument("--plot_interval", type=float, default=.66)
-    parser.add_argument("--info_steps", type=int, default=5)
-    parser.add_argument("--eval_every", default='epoch')
+    parser.add_argument("--info_steps", type=int, default=20)
+    parser.add_argument("--resume_from", type=str, default=None)
 
     args = parser.parse_args()
 
     with open(os.path.join('./configs', args.config), 'r') as f:
         config = yaml.safe_load(f)
     config = dict2namespace(config)
-
     return args, config
-
 
 
 if __name__ == "__main__":
@@ -64,7 +61,6 @@ if __name__ == "__main__":
             dp_main_adv(args, config)
         else:
             dp_main_no_adv(args, config)
-    
 
 """
 ## Baseline ## [done]
