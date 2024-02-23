@@ -38,7 +38,7 @@ def count_codebook_stats(model, dl, max_streams=5, num_vq=6, codebook_size=1024,
         usage[key] = percentage_used
     
         index_probs = val.float() / vq_total_counts[key]
-        entropy[key] = -(index_probs * torch.log(index_probs + 1e-10)).sum().item()
+        entropy[key] = -(index_probs * torch.log2(index_probs + 1e-10)).sum().item()
 
     return entropy, usage
 
@@ -84,7 +84,7 @@ def run(args, config):
     data_loaders = make_data_loader(datasets, 
                                     batch_size={"train": 20, "test": 16}, 
                                     shuffle={"train": False, "test": False}, 
-                                    sampler={"train": None, "test": None}, 
+                                    sampler=None, 
                                     num_workers=args.num_worker)
 
     entropy, usage = count_codebook_stats(
@@ -102,6 +102,19 @@ def run(args, config):
     print("Entropy: \n", json.dump(entropy, open(f"{args.weight_pth}/vq_stats/{args.split}/entropy.json", "w"), indent=2))
     print("Effective Percentage: \n", json.dump(usage, open(f"{args.weight_pth}/vq_stats/{args.split}/usage.json", "w"), indent=2))
 
+    total_use = len(usage) * 100
+    used_per = 0
+    for key, val in usage.items():
+        used_per += val
+
+    total_entropy = len(entropy) * 10
+    used_entropy = 0
+    for key, val in entropy.items():
+        used_entropy += val
+    
+    print(f"Total Used Percentage is {used_per}/{total_use} = {used_per/total_use}")
+    print(f"Effective Total Bitrate is {config.model.num_vqs*3*used_per/total_use:.2f}kbps/{config.model.num_vqs*3}kbps")
+    print(f"Bitrate Efficiency is {used_entropy}/{total_entropy} = {used_entropy/total_entropy}")
 
 
 
@@ -194,4 +207,19 @@ python run_vq_stats.py \
     --num_worker 4 \
     --device cuda
 
+python run_vq_stats.py \
+    --config residual_18k.yml \
+    --weight_pth ../output/swin-18k-residual-q-dropout \
+    --split test \
+    --num_streams 6 \
+    --num_worker 4 \
+    --device cuda
+
+python run_vq_stats.py \
+    --config residual_9k_gan.yml \
+    --weight_pth ../output/swin-9k-residual-gan-250k \
+    --split test \
+    --num_streams 6 \
+    --num_worker 4 \
+    --device cuda
 """

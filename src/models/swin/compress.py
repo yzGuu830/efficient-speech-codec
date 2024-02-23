@@ -126,7 +126,6 @@ class PatchDeEmbed(nn.Module):
         x = self.de_proj2(x.permute(0,3,1,2))     # BCHW -> BCFT -> B2FT
         return x
     
-
 def pixel_unshuffle(input, downscale_factor):
     batch_size, in_height, in_width, in_channel = input.size()
     out_channel = in_channel * (downscale_factor[0] * downscale_factor[1])

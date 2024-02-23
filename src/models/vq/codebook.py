@@ -27,10 +27,10 @@ class Codebook(nn.Module):
         self.proj = (input_size != embedding_size)
         if self.proj:
             self.proj_down = (
-                nn.Linear(input_size, embedding_size, bias=False)
+                (nn.Linear(input_size, embedding_size, bias=False))
             )
             self.proj_up = (
-                nn.Linear(embedding_size, input_size, bias=False)
+                (nn.Linear(embedding_size, input_size, bias=False))
             )
 
     def quantize_to_code(self, z):
@@ -98,6 +98,21 @@ class Codebook(nn.Module):
         z_q = self.dequantize_code(code)
         z_q_out = self.proj_up(z_q) if self.proj else z_q
         return z_q_out
+
+
+def count_posterior(code, codebook_size):
+    """ Compute the posterior codebook distribution P(q|e) on a total batch of encoded features
+        Args:
+            code: quantized discrete code of size [B, T]
+            codebook_size: total number of entries
+            returns: posterior distribution with size [B, codebook_size]
+    """
+    one_hot = F.one_hot(code, num_classes=codebook_size) # B T codebook_size
+    counts = one_hot.sum(dim=1) # B codebook_size
+    posterior = counts / code.size(1)
+
+    return posterior
+
 
 
 class VectorQuantize(nn.Module):

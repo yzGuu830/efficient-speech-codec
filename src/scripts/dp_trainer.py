@@ -35,13 +35,21 @@ class Trainer:
         self.best_perf = None
         self.progress_bar = None
 
+
     def _train_batch(self, input):
         if self.is_scalable:
-            streams = np.random.randint(1, self.config.model.max_streams+1)
+            if self.args.q_dropout_rate != 1.0:
+                # Do Random Sample N with probability q_dropout_rate
+                if np.random.choice([0, 1], p=[1-self.args.q_dropout_rate, self.args.q_dropout_rate]): 
+                    streams = np.random.randint(1, self.config.model.max_streams+1)
+                else:
+                    streams = self.config.model.max_streams
+            else:
+                streams = np.random.randint(1, self.config.model.max_streams+1)
 
         self.optimizer.zero_grad()
         output = self.model(**dict(x=input["audio"], 
-                            x_feat=input["feat"], 
+                            x_feat=input["feat"] if "feat" in input else None, 
                             streams=streams, 
                             train=True))
         output["loss"] = self.config.loss.recon_factor * output["recon_loss"] + \
@@ -64,7 +72,7 @@ class Trainer:
 
     def _test_batch(self, input):
         output = self.model(**dict(x=input["audio"], 
-                            x_feat=input["feat"], 
+                            x_feat=input["feat"] if "feat" in input else None, 
                             streams=self.config.model.max_streams, 
                             train=False))
 
@@ -144,7 +152,7 @@ class Trainer:
         print(f"Epoch {epoch} | Training checkpoint saved at {save_pth}")
 
     def _load_checkpoint(self, load_pth):
-        map_location = {'cuda:0'}
+        map_location = 'cuda:0'
         ckp = torch.load(load_pth, map_location=map_location)
         new_state_dict = OrderedDict()
         for key, value in ckp['model_state_dict'].items():
@@ -195,7 +203,8 @@ class Trainer:
                                 in_freq=config.data.in_freq,
                                 win_len=config.data.win_len,
                                 hop_len=config.data.hop_len,
-                                sr=config.data.sr)
+                                sr=config.data.sr,
+                                trans_on_cpu=args.trans_on_cpu)
 
         data_loaders = make_data_loader(datasets, 
                                         batch_size={"train": args.train_bs_per_device, "test": args.test_bs_per_device}, 
@@ -225,7 +234,7 @@ def main(args, config):
     trainer = Trainer(config, args)
     
     if args.wb_project_name is not None:
-        wandb.login(key="880cb5a13d061af184bd6f3833bbce3df6d099fc")
+        wandb.login(key="df8e2c82f85049008e91367edf75e544588d2aa9")
         wandb.init(project=args.wb_project_name, name=args.wb_exp_name)
     else:   
         print("Deactivated WandB Logging for Debugging")
