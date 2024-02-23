@@ -3,7 +3,7 @@ import torch, transformers
 import sys
 sys.path.append("../")
 
-from models.codec import SwinAudioCodec
+from models.codec import SwinAudioCodec, CrossScaleProgressiveResCodec
 from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR, SNR
 
 def quantization_dropout(dropout_rate: float, max_streams: int):
@@ -103,15 +103,24 @@ def make_scheduler(optimizer, scheduler_type, total_steps, warmup_steps=0):
 
     return scheduler
 
-def make_model(config, vis):
-    model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
-        config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
-        config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
-        config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
-        config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, 
-        config.model.is_causal, config.model.vq, config.model.fuse_net, config.model.scalable, False,
-        config.model.mel_windows, config.model.mel_bins, config.model.win_len,
-        config.model.hop_len, config.model.sr, vis)
+def make_model(config, vis, model="swin_codec"):
+    if model != "progressive_codec":
+        model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
+            config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
+            config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
+            config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
+            config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, config.model.vq, config.model.scalable,
+            config.model.mel_windows, config.model.mel_bins, config.model.win_len,
+            config.model.hop_len, config.model.sr, vis)
+    else:
+        model = CrossScaleProgressiveResCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
+            config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
+            config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
+            config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
+            config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, config.model.vq, config.model.scalable,
+            config.model.mel_windows, config.model.mel_bins, config.model.win_len,
+            config.model.hop_len, config.model.sr, vis)
+
     return model
 
 def make_metrics(device):

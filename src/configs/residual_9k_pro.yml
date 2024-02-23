@@ -16,21 +16,19 @@ model:
     max_streams: 6
     overlap: 2
     num_vqs: 3
-    proj_ratio: 0.5
+    proj_ratio: 1.
     codebook_size: 1024
-    codebook_dims: [null]
+    codebook_dims: [12]
     patch_size: [3,2]
-    use_ema: True
-    use_cosine_sim: False
-    is_causal: False
+    use_ema: False
+    use_cosine_sim: True
     vq: "GVQ"
-    fuse_net: "None"
     scalable: True
-    mel_windows: [32,64,128,256,512,1024,2048]
-    mel_bins: [5,10,20,40,80,160,320]
     win_len: 20
     hop_len: 5
     sr: 16000
+    mel_windows: [32,64,128,256,512,1024,2048]
+    mel_bins: [5,10,20,40,80,160,320]
 
 loss:
     recon_factor: 1.0
@@ -38,3 +36,9 @@ loss:
     codebook_factor: 1.0
     mel_factor: .25
     reg_factor: 0.0
+
+training:
+    warmup_steps: 15000
+    progressive_steps: [25000,25000,25000,25000,25000]
+    stabilize_steps: [15000,15000,15000,15000,15000]
+    dropout_steps: 50000

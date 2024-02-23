@@ -280,7 +280,7 @@ def main(args, config):
             accel.print("Deactivated WandB Logging for Debugging")
 
     trainer = Trainer(accel, config, args)
-    trainer.train(args.num_epochs)
+    # trainer.train(args.num_epochs)
 
     if accel.is_main_process:
         wandb.finish()

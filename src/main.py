@@ -4,6 +4,7 @@ from scripts.ddp_trainer import main as ddp_main
 from scripts.dp_trainer import main as dp_main
 from scripts.trainer_with_adv import main as dp_main_adv
 from scripts.trainer_no_adv import main as dp_main_no_adv
+from scripts.progressive_trainer import main as progressive_main
 import torch.multiprocessing as mp
 import warnings
 warnings.filterwarnings("ignore")
@@ -34,9 +35,9 @@ def parse_args_and_config():
     parser.add_argument("--num_worker", type=int, default=0)
     parser.add_argument("--scheduler_type", type=str, default="constant")
     parser.add_argument("--warmup_steps", default=0, type=int)
-    parser.add_argument("--plot_interval", type=float, default=.66)
-    parser.add_argument("--info_steps", type=int, default=20)
+    parser.add_argument("--info_steps", type=int, default=5)
     parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--eval_every", default="epoch")
     parser.add_argument("--init_ckpt", default=None, type=str)
 
     args = parser.parse_args()
@@ -63,7 +64,21 @@ if __name__ == "__main__":
         else:
             dp_main_no_adv(args, config)
 
+    elif args.parallel == 'accel_pro':
+        progressive_main(args, config)
 """
+python main.py \
+    --config residual_9k_pro.yml \
+    --seed 53 \
+    --wb_exp_name swin-6k-residual-dropout \
+    --num_epochs 80 \
+    --lr 1.0e-4 \
+    --train_bs_per_device 18 \
+    --test_bs_per_device 16 \
+    --parallel accel_pro \
+    --save_dir ./runs \
+    --q_dropout_rate .5
+
 ## Baseline ## [done]
 python main.py \
     --config residual_18k.yml \
