@@ -35,7 +35,7 @@ class ProgressiveTrainer:
             self.progress_bar.set_description(f"Training Model [{self.stage}][dropout sampling]")
         else:
             streams = int(self.stage.split("_")[-1]) + 1
-            self.progress_bar.set_description(f"Training Model [{self.stage}][{streams*1.5:2f}kbps]")
+            self.progress_bar.set_description(f"Training Model [{self.stage}][{(streams*1.5):.2f}kbps]")
 
         alpha = self.compute_fade_in_alpha(self.progress_bar.n)
         output = self.generator(**dict(x=input["audio"], x_feat=input["feat"] if "feat" in input else None, 
@@ -53,24 +53,25 @@ class ProgressiveTrainer:
         self.optimizer.step()
         self.scheduler.step()
 
-        # Logging batch losses
-        if self.evaluation is None:
-            self.evaluation = {k: [] for k in output.keys() if k in ["loss", "recon_loss", 
-                                "commitment_loss", "codebook_loss", "mel_loss", "kl_loss",]}
-            self.evaluation["alpha"] = []
-        for key, _ in self.evaluation.items():
-            if key == "alpha":
-                self.evaluation[key].append(alpha) 
-            else:
-                self.evaluation[key].append(output[key].mean().item())
-        
         self.progress_bar.update(1)
-        if self.progress_bar.n in self.args.save_steps:
-            os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/", exist_ok=True)
-            torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/raw_audio_step_{self.progress_bar.n}.wav",
-                            input["audio"][0:1].cpu(), 16000)
-            torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/recon_audio_step_{self.progress_bar.n}.wav",
-                            output["recon_audio"][0:1].cpu(), 16000)
+        # Logging batch losses
+        if self.accel.is_main_process:
+            if self.evaluation is None:
+                self.evaluation = {k: [] for k in output.keys() if k in ["loss", "recon_loss", 
+                                    "commitment_loss", "codebook_loss", "mel_loss", "kl_loss",]}
+                self.evaluation["alpha"] = []
+            for key, _ in self.evaluation.items():
+                if key == "alpha":
+                    self.evaluation[key].append(alpha) 
+                else:
+                    self.evaluation[key].append(output[key].mean().item())
+
+            if self.progress_bar.n in self.args.save_steps:
+                os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/", exist_ok=True)
+                torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/raw_audio_step_{self.progress_bar.n}.wav",
+                                input["audio"][0:1].cpu(), 16000)
+                torchaudio.save(f"{self.args.save_dir}/{self.args.wb_exp_name}/train_log/recon_audio_step_{self.progress_bar.n}.wav",
+                                output["recon_audio"][0:1].cpu(), 16000)
     
     def _log_train_batch(self):
         for key, val in self.evaluation.items():
@@ -79,12 +80,11 @@ class ProgressiveTrainer:
             wandb.log(self.evaluation)
         self.evaluation = None
 
-    def _test_batch(self, input):
+    def _test_batch(self, input, streams):
         self.generator.eval() 
         output = self.generator(**dict(x=input["audio"], 
                             x_feat=input["feat"] if "feat" in input else None, 
-                            streams=int(self.stage.split("_")[-1]) + 1 if self.stage != "dropout_step" else self.config.model.max_streams, 
-                            train=False))
+                            streams=streams, train=False))
         local_obj_metric = {} # metric stats on each device
         for k, m in self.obj_metric.items():
             if k in ['Test_PESQ', 'Test_MelDist', 'Test_STFTDist', 'Test_SNR']:
@@ -99,27 +99,35 @@ class ProgressiveTrainer:
         for k, v_g in local_obj_metric_gathered.items(): # cummulate for all batches
             self.cumm_metric[k].extend(v_g)
 
-    def _test_epoch(self):
+    def _test_epoch(self, streams=None):
         """Distributed Evaluate"""
         self.cumm_metric = {k:[] for k in self.obj_metric.keys()}
+        if streams is None: 
+            streams = int(self.stage.split("_")[-1]) + 1 if self.stage != "dropout_step" else self.config.model.max_streams
         if self.accel.is_main_process:
             for _, input in tqdm(enumerate(self.test_data), total=len(self.test_data), 
-                                desc=f"Eval at step {self.progress_bar.n}/{self.total_training_steps}"): 
-                self._test_batch(input)
+                                desc=f"Eval at step {self.progress_bar.n+1}/{self.total_training_steps}"): 
+                self._test_batch(input, streams)
         else:
             for _, input in enumerate(self.test_data): 
-                self._test_batch(input)
+                self._test_batch(input, streams)
 
-        if self.accel.is_main_process and self.stage == "dropout_step":
+        if self.accel.is_main_process:
             test_performance = self._log_test_batch()
-            self.accel.print(" | ".join(f"{k}: {v:.4f}" for k, v in test_performance.items()))
-            if test_performance["Test_MelDist"] < self.best_perf:
-                self.best_perf = test_performance["Test_MelDist"]
-                self.accel.print(f"Found Best Model at step {self.progress_bar.n}")
-                os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}", exist_ok=True)
-                self._save_checkpoint(self.progress_bar.n, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/best.pt")
-            os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}", exist_ok=True)
-            self._save_checkpoint(self.progress_bar.n, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/checkpoint.pt")
+            self.accel.print(f"{self.stage}[{(1.5*streams):.2f}kbps] | ", " | ".join(f"{k}: {v:.4f}" for k, v in test_performance.items()))
+            if self.stage == "dropout_step": # save best in dropout_step
+                if test_performance["Test_MelDist"] < self.best_perf:
+                    self.best_perf = test_performance["Test_MelDist"]
+                    self.accel.print(f"Found Best Model at step {self.progress_bar.n+1}")
+                    os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}", exist_ok=True)
+                    self._save_checkpoint(self.progress_bar.n+1, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/best.pt")
+            if self.stage.split("_")[0] == "stabilize": # save checkpoint in stabilize_step
+                self.accel.print(f"Saving Checkpoint at step {self.progress_bar.n+1}")
+                if not os.path.exists(f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}"):
+                    os.makedirs(f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}")
+                self._save_checkpoint(self.progress_bar.n+1, save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{self.stage}/checkpoint.pt")
+        
+        self.accel.wait_for_everyone()
 
     def _log_test_batch(self):
         test_performance = {}
@@ -150,7 +158,7 @@ class ProgressiveTrainer:
         self.accel.print(f"learning_rate: {self.args.lr} | batch_size: {self.args.train_bs_per_device * self.args.num_device} | num_worker: {self.args.num_worker}")
         self.accel.print("Progressive Training Steps: ", self.config.training.progressive_steps, 
                          "\nStabilize Training Steps: ", self.config.training.stabilize_steps, 
-                         "\nDropout Training Steps: ", self.config.training.dropout_steps)
+                         "\nDropout Training Steps: ", self.config.training.dropout_steps, " Warmup Training Steps: ", self.config.training.warmup_steps)
         
         # Initialize from a pretrained autoencoder
         if self.args.init_ckpt is not None: 
@@ -159,7 +167,7 @@ class ProgressiveTrainer:
                 self._load_checkpoint(self.args.init_ckpt, model_only=True)
         
         self.start_step, self.best_perf = 0, np.inf
-        self.progress_bar = tqdm(initial=self.start_step, total=self.total_training_steps, position=0, leave=True)
+        self.progress_bar = tqdm(initial=self.start_step, total=self.total_training_steps)
         while True:
             flag=False
             for _, input in enumerate(self.train_data):
@@ -171,8 +179,12 @@ class ProgressiveTrainer:
 
                 if (self.progress_bar.n+1) % self.args.eval_every == 0:
                     self._test_epoch()
+                    # if self.stage not in ["dropout_step", "stabilize_step_0"]: # evaluate previous bitstream also (catastrophic forgetting)
+                    #     progressive_step = int(self.stage.split("_")[-1])
+                    #     self.accel.print("Evaluate Previous one Bitstream Also...")
+                    #     self._test_epoch(streams=progressive_step)
 
-                if self.progress_bar.n == 250000: # for comparing with baselines
+                if self.progress_bar.n == 250000 and self.accel.is_main_process: # for comparing with baselines
                     self._save_checkpoint(self.progress_bar.n, 
                         save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/250ksteps_ckp.pt")
 
@@ -201,11 +213,11 @@ class ProgressiveTrainer:
         """
         if step == self.next_cutoff: # update stage
             next_stage = self.next_stage.split("_")[0]
-            if next_stage in ["progressive", "dropout"]:
-                if next_stage == "dropout": current_progressive_step = 6
-                else: current_progressive_step = int(self.next_stage.split("_")[-1])
-                self._save_checkpoint(self.progress_bar.n, 
-                    save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{current_progressive_step*1.5}kbps_progressive_step{current_progressive_step}_step{self.progress_bar.n}_ckp.pt")
+            # if next_stage in ["progressive", "dropout"]:
+            #     if next_stage == "dropout": current_progressive_step = 6
+            #     else: current_progressive_step = int(self.next_stage.split("_")[-1])
+            #     self._save_checkpoint(self.progress_bar.n, 
+            #         save_pth=f"{self.args.save_dir}/{self.args.wb_exp_name}/{current_progressive_step*1.5}kbps_progressive_step{current_progressive_step}_step{self.progress_bar.n}_ckp.pt")
             self.stage = self.next_stage
             idx = self.progressive_stages.index(self.stage)
             self.current_cutoff = self.progressive_cutoffs[idx]
@@ -248,7 +260,7 @@ class ProgressiveTrainer:
     def load_train_objs(self, config, args):
         """Load Model, Optimizer, Scheduler, Metrics"""
 
-        generator = make_model(config, vis=(self.accel.device=="cuda:0"), model="progressive_codec")
+        generator = make_model(config, vis=(self.accel.device=="cuda:0"), model="residual_csvq_codec")
         params = generator.parameters()
         optimizer = make_optimizer(params, optimizer_name="AdamW", lr=args.lr)
         scheduler = make_scheduler(optimizer, args.scheduler_type, total_steps=self.total_training_steps, warmup_steps=args.warmup_steps)

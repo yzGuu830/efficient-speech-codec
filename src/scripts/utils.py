@@ -1,10 +1,13 @@
 import numpy as np
 import torch, transformers
+import torch.nn.functional as F
 import sys
 sys.path.append("../")
 
 from models.codec import SwinAudioCodec, CrossScaleProgressiveResCodec
+from models.residual_csvq import ResidualCrossScaleCodec
 from models.losses.metrics import PESQ, MelDistance, SISDRLoss, STFTDistance, PSNR, SNR
+from models.vq.quantization import GroupVQ
 
 def quantization_dropout(dropout_rate: float, max_streams: int):
     """
@@ -100,19 +103,21 @@ def make_scheduler(optimizer, scheduler_type, total_steps, warmup_steps=0):
     elif scheduler_type == "cosine_warmup":
         scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, 
                                     num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+    elif scheduler_type == "exponential_decay":
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999996)
 
     return scheduler
 
 def make_model(config, vis, model="swin_codec"):
-    if model != "progressive_codec":
+    if model == "swin_codec":
         model = SwinAudioCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
             config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
             config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
             config.model.num_vqs, config.model.proj_ratio, config.model.codebook_size, config.model.codebook_dims,
-            config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, config.model.vq, config.model.scalable,
-            config.model.mel_windows, config.model.mel_bins, config.model.win_len,
+            config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, config.model.vq, config.model.kmeans_init,
+            config.model.scalable, config.model.mel_windows, config.model.mel_bins, config.model.win_len,
             config.model.hop_len, config.model.sr, vis)
-    else:
+    elif model == "progressive_codec":
         model = CrossScaleProgressiveResCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims,
             config.model.swin_depth, config.model.swin_heads, config.model.window_size, 
             config.model.mlp_ratio, config.model.max_streams, config.model.overlap, 
@@ -120,7 +125,15 @@ def make_model(config, vis, model="swin_codec"):
             config.model.patch_size, config.model.use_ema, config.model.use_cosine_sim, config.model.vq, config.model.scalable,
             config.model.mel_windows, config.model.mel_bins, config.model.win_len,
             config.model.hop_len, config.model.sr, vis)
-
+    elif model == "residual_csvq_codec":
+        model = ResidualCrossScaleCodec(config.model.in_dim, config.model.in_freq, config.model.h_dims, 
+                 config.model.max_streams, 
+                 config.model.overlap, config.model.num_vqs, config.model.proj_ratio,
+                 config.model.codebook_size, config.model.codebook_dims, config.model.use_ema, config.model.use_cosine_sim,
+                 config.model.patch_size, config.model.swin_depth, config.model.swin_heads,
+                 config.model.window_size, config.model.mlp_ratio,
+                 config.model.mel_windows, config.model.mel_bins,
+                 config.model.win_len, config.model.hop_len, config.model.sr, config.model.vq, vis)
     return model
 
 def make_metrics(device):
@@ -144,6 +157,87 @@ def switch_stage(model, stage="warmup->freeze",
         optimizer = make_optimizer(model.parameters(), optimizer_name, decay_lr)
 
     return model, optimizer
+
+def reset_codebooks(gvq):
+    """ set groupvq initialized flag to false, for initialize again """
+    assert isinstance(gvq, GroupVQ), "Specified Module is not GroupVQ"
+    gvq.codebook_initialized.fill_(0)
+
+class Entropy_Counter:
+    def __init__(self, codebook_size=1024, num_streams=6, num_groups=3, device="cuda"):
+
+        self.vq_distributions = {
+                f"stream_{S}_group_{G+1}": torch.zeros(codebook_size, device=device) for S in range(num_streams) for G in range(num_groups)
+            }
+        self.counts = 0
+        
+        self.num_streams = num_streams
+        self.num_groups = num_groups
+        self.codebook_size = codebook_size
+        self.device = device
+
+        self.max_entropy_per_book = np.log2(codebook_size)
+        self.max_total_entropy = len(self.vq_distributions) * self.max_entropy_per_book
+
+        self.entropy = None
+
+    def update(self, multi_codes):
+        """
+        Args:
+            multi_codes: [bs,G,T,num_streams] (T=500 in test T=150 in train)
+            return_all_scale: return bitrate efficiency
+        """ 
+        assert multi_codes.size(-1) == self.num_streams and multi_codes.size(1) == self.num_groups, "code indices size not match"
+        num_of_code = multi_codes.size(0) * multi_codes.size(2)
+
+        for s in range(self.num_streams):
+            stream_s_code = multi_codes[:, :, :, s] # bs, G, T
+            for g in range(self.num_groups):
+                stream_s_group_g_code = stream_s_code[:,g,:] # bs, T
+                one_hot = F.one_hot(stream_s_group_g_code, num_classes=self.codebook_size) # bs, T, codebook_size
+                self.vq_distributions[f"stream_{s}_group_{g+1}"] += one_hot.view(-1, self.codebook_size).sum(0) # (bs*T, codebook_size)
+        self.counts += num_of_code # bs*T
+
+    def compute_distribution(self,):
+        for k, _counts in self.vq_distributions.items():
+            self.vq_distributions[k] = _counts / torch.tensor(self.counts, device=_counts.device)
+        return self.vq_distributions
+    
+    def compute_entropy(self, return_total=False):
+        self.compute_distribution()
+        entropy = {}
+        for k, dist in self.vq_distributions.items():
+            entropy[k] = (- torch.sum(dist * torch.log2(dist + 1e-10))).item()
+    
+        if return_total:
+            return sum(entropy.values())
+        
+        return entropy
+    
+    def compute_bitrate_efficiency(self, return_total=False):
+        if self.entropy is None:
+            self.entropy = self.compute_entropy(False)
+
+        efficiency = {}
+        for k, e in self.entropy.items():
+            efficiency[k] = round(e / self.max_entropy_per_book, 4)
+
+        if return_total:
+            return sum(self.entropy.values()) / self.max_total_entropy
+        
+        return efficiency
+
+    def reset(self):
+        self.vq_distributions = {
+                f"stream_{S}_group_{G+1}": torch.zeros(self.codebook_size, device=self.device) \
+                    for S in range(self.num_streams) for G in range(self.num_groups)
+            }
+        self.counts = 0
+        self.entropy = None
+
+
+
+
 
 
 if __name__ == "__main__":

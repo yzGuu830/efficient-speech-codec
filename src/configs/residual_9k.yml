@@ -25,6 +25,7 @@ model:
     is_causal: False
     vq: "GVQ"
     fuse_net: "None"
+    kmeans_init: null # no initialization
     scalable: True
     mel_windows: [32,64,128,256,512,1024,2048]
     mel_bins: [5,10,20,40,80,160,320]

@@ -6,11 +6,14 @@ from utils import manage_checkpoint, dict2namespace
 
 dacs_configs = {
     "dac": {"enc_dim": 64, "dec_dim": 1536},
-    "dac_tiny": {"enc_dim": 32, "dec_dim": 288}
+    "dac_tiny": {"enc_dim": 32, "dec_dim": 288},
+    "dac_tiny_no_adv": {"enc_dim": 32, "dec_dim": 288}
 }
 ours_configs = {
     "swin9k": "residual_9k.yml",
     "swin9kgan": "residual_9k_gan.yml",
+    "ours_final": "residual_9k_kmeans.yml",
+    "ours_final_gan": "residual_9k_kmeans_gan.yml"
 }
 
 def make_args():
@@ -150,19 +153,31 @@ if __name__ == "__main__":
         zip_files(args.save_pth, args.dacs_model_tag)
 
 
-"""
-python make_instances.py \
-    --data_pth ../data/DNS_CHALLENGE/processed_wav/test/1-1158 \
-    --save_pth ../compare \
-    --ours_model_pth /root/autodl-fs/swin-9k-residual-gan-ADAP/refine/best.pt \
-    --dacs_model_pth /root/autodl-fs/dac_output/dac16khz9k_tiny/best/dac/weights.pth \
-    --ours_model_tag swin9kgan \
-    --dacs_model_tag dac_tiny 
-
-
+""" 
+DACs
 python make_instances.py \
     --data_pth ../data/DNS_CHALLENGE/processed_wav/test/1-1158 \
     --save_pth ../compare \
     --dacs_model_pth /root/autodl-fs/dac_output/dac16khz9k_tiny/best/dac/weights.pth \
     --dacs_model_tag dac_tiny 
+
+python make_instances.py \
+    --data_pth ../data/DNS_CHALLENGE/processed_wav/test/1-1158 \
+    --save_pth ../compare \
+    --dacs_model_pth /root/autodl-fs/dac_output/dac16khz9k_tiny_no_adv/best/dac/weights.pth \
+    --dacs_model_tag dac_tiny_no_adv
+
+
+Ours 
+python make_instances.py \
+    --data_pth ../data/DNS_CHALLENGE/processed_wav/test/1-1158 \
+    --save_pth ../compare \
+    --ours_model_pth ../output/ours-final-warmup-kmeans/finetune/best.pt \
+    --ours_model_tag ours_final
+
+python make_instances.py \
+    --data_pth ../data/DNS_CHALLENGE/processed_wav/test/1-1158 \
+    --save_pth ../compare \
+    --ours_model_pth ../output/ours-final-warmup-kmeans-gan/finetune/best.pt \
+    --ours_model_tag ours_final_gan
 """

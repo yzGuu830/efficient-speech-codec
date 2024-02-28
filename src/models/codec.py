@@ -27,6 +27,7 @@ class BaseCodec(nn.Module):
                  patch_size: tuple,
                  use_ema: bool,
                  use_cosine_sim: bool,
+                 kmeans_init: bool,
                  mel_windows: int, 
                  mel_bins: int,
                  win_len: int, 
@@ -40,9 +41,6 @@ class BaseCodec(nn.Module):
         self.max_streams = max_streams
 
         self.stats = None
-        # self.freq_augment = torchaudio.transforms.FrequencyMasking(freq_mask_param=80, iid_masks=True) if augment else None
-        # self.time_augment = torchaudio.transforms.TimeMasking(time_mask_param=80, iid_masks=True) if augment else None
-
         self.enc_h_dims = h_dims
         self.dec_h_dims = h_dims[::-1]
 
@@ -53,14 +51,41 @@ class BaseCodec(nn.Module):
                                             win_length=int(win_len*sr*1e-3),
                                             hop_length=int(hop_len*sr*1e-3))
         
-        self.quantizer = self.init_quantizer(
-                        overlap, num_vqs, proj_ratio, codebook_size, codebook_dims,
-                        patch_size, use_ema, use_cosine_sim, vq)
-        self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
-        
         self.mel_loss, self.recon_loss = MELLoss(mel_windows, mel_bins), L2Loss(power_law=True)
         
     def init_quantizer(self, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, 
+                       patch_size=None, use_ema=True, use_cosine_sim=False, vq="GVQ", kmeans_init=False):
+        quantizer = nn.ModuleList()
+        if isinstance(codebook_dims, int):
+            codebook_dims = [codebook_dims]*self.max_streams
+        assert isinstance(codebook_dims, list), "codebook_dims should be a list"
+        if len(codebook_dims)==1:
+            codebook_dims = codebook_dims*self.max_streams
+
+        if patch_size:  freq_patch, time_patch = patch_size[0], patch_size[1]
+        else:   freq_patch, time_patch = 1, 1
+
+        self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
+
+        quantization_map = {"GVQ": GroupVQ, "RVQ": ResidualVQ, "FSQ": FiniteSQ}
+        quantizer.append(
+                quantization_map[vq](
+                    self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1), # tag
+                    overlap, num_vqs, proj_ratio, codebook_dims[0], codebook_size, use_ema, use_cosine_sim, kmeans_init
+                )
+            ) 
+        for i in range(1, self.max_streams):
+            quantizer.append(
+                quantization_map[vq](
+                    self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i), # tag
+                    overlap, num_vqs, proj_ratio, codebook_dims[i], codebook_size, use_ema, use_cosine_sim, kmeans_init
+                )
+            ) 
+        self.max_bps = (2/overlap) * self.max_streams * math.log2(quantizer[0].codebook_size) * num_vqs // (20 * time_patch//2)
+        print(f"Audio Codec {self.max_bps}kbps Initialized")
+        return quantizer
+
+    def init_quantizer_icsvq(self, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, 
                        patch_size=None, use_ema=True, use_cosine_sim=False, vq="GVQ"):
         quantizer = nn.ModuleList()
         if isinstance(codebook_dims, int):
@@ -72,24 +97,20 @@ class BaseCodec(nn.Module):
         if patch_size:  freq_patch, time_patch = patch_size[0], patch_size[1]
         else:   freq_patch, time_patch = 1, 1
 
+        self.use_ema, self.use_cosine_sim = use_ema, use_cosine_sim
+
         quantization_map = {"GVQ": GroupVQ, "RVQ": ResidualVQ, "FSQ": FiniteSQ}
-        quantizer.append(
-                quantization_map[vq](
-                    self.dec_h_dims[0], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-1), # tag
-                    overlap, num_vqs, proj_ratio, codebook_dims[0], codebook_size, use_ema, use_cosine_sim
-                )
-            ) 
-        for i in range(1, self.max_streams):
+        for i in range(self.max_streams):
             quantizer.append(
                 quantization_map[vq](
-                    self.dec_h_dims[i-1], (self.in_freq // freq_patch) // 2**(len(self.enc_h_dims)-i), # tag
+                    self.enc_h_dims[i+1], (self.in_freq // freq_patch) // 2**(i+1), # tag
                     overlap, num_vqs, proj_ratio, codebook_dims[i], codebook_size, use_ema, use_cosine_sim,
                 )
             ) 
         self.max_bps = (2/overlap) * self.max_streams * math.log2(quantizer[0].codebook_size) * num_vqs // (20 * time_patch//2)
         print(f"Audio Codec {self.max_bps}kbps Initialized")
         return quantizer
-    
+
     def vis_quantization(self):
         if isinstance(self.quantizer[0], ResidualVQ):   vq_type = "Residual-VQ"
         elif isinstance(self.quantizer[0], GroupVQ):    vq_type = "Group-VQ"
@@ -167,6 +188,7 @@ class SwinAudioCodec(BaseCodec):
                  use_ema: bool = False, 
                  use_cosine_sim: bool = True, 
                  vq: str = "GVQ",
+                 kmeans_init: bool = False,
                  scalable: bool = True,
                  mel_windows: int = [32,64,128,256,512,1024,2048], 
                  mel_bins: int = [5,10,20,40,80,160,320], 
@@ -175,9 +197,12 @@ class SwinAudioCodec(BaseCodec):
                  sr: int = 16000,
                  vis: bool = True,) -> None:
         super().__init__(in_dim, in_freq, h_dims, max_streams, overlap, num_vqs, proj_ratio, codebook_size, codebook_dims, 
-                    patch_size, use_ema, use_cosine_sim, mel_windows, mel_bins, win_len, hop_len, sr, vq)
+                    patch_size, use_ema, use_cosine_sim, kmeans_init, mel_windows, mel_bins, win_len, hop_len, sr, vq)
 
         self.scalable = scalable
+        self.quantizer = self.init_quantizer(
+                        overlap, num_vqs, proj_ratio, codebook_size, codebook_dims,
+                        patch_size, use_ema, use_cosine_sim, vq, kmeans_init)
 
         self.encoder = SwinEncoder(
             swin_depth, swin_heads, window_size, mlp_ratio,
@@ -188,13 +213,12 @@ class SwinAudioCodec(BaseCodec):
             in_freq, patch_size, self.in_dim, self.dec_h_dims, False,
             max_streams, "None",
         )
-
         if vis:
             print("Apply Vanilla Residual Fusion Net for Swin Codec")
             self.vis_quantization()
             self.vis_encoder_decoder()
 
-    def train_one_step(self, x, x_feat=None, streams=6):
+    def train_one_step(self, x, x_feat=None, streams=6, freeze_codebook=False):
         self.train()
         if x_feat is None:
             x_feat = self.spec_transform(x)
@@ -202,7 +226,8 @@ class SwinAudioCodec(BaseCodec):
             x_feat = x_feat.permute(0,3,1,2)
 
         enc_hs, Wh, Ww = self.encoder.encode(x_feat)
-        recon_feat, _, cm_loss, cb_loss, kl_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+        recon_feat, _, cm_loss, cb_loss, kl_loss, multi_codes = self.decoder.decode(
+                enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww, freeze_codebook=freeze_codebook)
         rec_x = self.audio_reconstruct(recon_feat)
 
         recon_loss = self.recon_loss(x_feat, recon_feat)
@@ -221,7 +246,7 @@ class SwinAudioCodec(BaseCodec):
             }
     
     @torch.inference_mode()
-    def test_one_step(self, x, x_feat, streams):
+    def test_one_step(self, x, x_feat, streams, freeze_codebook=False):
         self.eval()
         if x_feat is None:
             x_feat = self.spec_transform(x)
@@ -230,22 +255,32 @@ class SwinAudioCodec(BaseCodec):
 
         enc_hs, Wh, Ww = self.encoder.encode(x_feat)
 
-        recon_feat, _, cm_loss, cb_loss, kl_loss = self.decoder.decode(enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww)
+        recon_feat, _, cm_loss, cb_loss, kl_loss, multi_codes = self.decoder.decode(
+            enc_hs, streams, vqs=self.quantizer, Wh=Wh, Ww=Ww, freeze_codebook=freeze_codebook)
 
         rec_x = self.audio_reconstruct(recon_feat)
-
         return {
                 "raw_audio": x,
                 "recon_audio": rec_x,
                 "raw_feat": x_feat, 
                 "recon_feat": recon_feat,
+                "multi_codes": multi_codes,
             }
     
-    def forward(self, x, x_feat, streams, train=False):
+    def forward(self, x, x_feat, streams, train=False, freeze_codebook=False):
+        """
+        Args: 
+            x: audio Tensor
+            x_feat: audio complex STFT
+            streams: number of streams transmitted
+            train: set False in inference
+            freeze_codebook: boolean set True only during pretrain stage (meanwhile streams has to be max_stream)
+        """
+        streams = self.max_streams if freeze_codebook else streams
         if train:
-            return self.train_one_step(x, x_feat, streams)
+            return self.train_one_step(x, x_feat, streams, freeze_codebook)
         else:
-            return self.test_one_step(x, x_feat, streams)
+            return self.test_one_step(x, x_feat, streams, freeze_codebook)
         
     @torch.inference_mode()
     def encode(self, x, num_streams=6):
@@ -402,8 +437,7 @@ class CrossScaleProgressiveResCodec(BaseCodec):
         self.encoder.vis_encoder()
         print()
         self.decoder.vis_decoder()
-
-        
+       
 
 class BaseEncoder(nn.Module):
     def __init__(self, in_dim: int, h_dims: list) -> None:
@@ -521,42 +555,6 @@ class BaseCrossScaleDecoder(nn.Module):
             )
             residual_q *= mask[:, None, None]
         return post_fuse_net[idx](residual_q + dec)
-    
-    # def cross_w_attn_pre_fuse(self, enc, dec, idx, pre_fuse_net, Wh=None, Ww=None):
-    #     """enc/dec shape: [B, F*T, C]"""
-
-    #     window_attn = pre_fuse_net[idx]
-    #     aligned_dec, _ = window_attn((dec, enc))
-    #     residual = enc - aligned_dec
-
-    #     return residual
-    # def cross_w_attn_post_fuse(self, residual_q, dec, idx, post_fuse_net, Wh=None, Ww=None):
-    #     """residual_q/dec shape: [B, F*T, C]"""
-
-    #     window_attn = post_fuse_net[idx]
-    #     aligned_enc, _ = window_attn((residual_q, dec))
-    #     dec_refine = dec + aligned_enc
-
-    #     return dec_refine
-    
-    # def self_w_attn_pre_fuse(self, enc, dec, idx, pre_fuse_net, Wh, Ww):
-    #     """enc/dec shape: [B, F*T, C]"""
-
-    #     window_attn = pre_fuse_net[idx]
-    #     merge = torch.cat((enc,dec), dim=-1)
-
-    #     merge, Wh, Ww = window_attn(merge, Wh, Ww)
-
-    #     return merge
-    
-    # def self_w_attn_post_fuse(self, residual_q, dec, idx, post_fuse_net, Wh, Ww):
-    #     """residual_q/dec shape: [B, F*T, C]"""
-
-    #     window_attn = post_fuse_net[idx]
-    #     merge = torch.cat((residual_q,dec), dim=-1)
-
-    #     merge, Wh, Ww = window_attn(merge, Wh, Ww)
-    #     return merge
 
     def csvq_layer(self, 
                    enc: torch.tensor, 
@@ -567,10 +565,11 @@ class BaseCrossScaleDecoder(nn.Module):
                    post_fuse_net: nn.ModuleList = None, 
                    Wh: int = None, 
                    Ww: int = None,
-                   transmit: bool=True):
+                   transmit: bool=True,
+                   freeze_codebook: bool=False):
         # Quantization Forward that combines quantize and dequantize
         residual = self.pre_fuse(enc, dec, idx, pre_fuse_net, Wh, Ww)
-        residual_q, cm_loss, cb_loss, kl_loss = vq(residual)
+        residual_q, cm_loss, cb_loss, kl_loss, indices, _ = vq(residual, freeze_codebook)
         dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, Wh, Ww, transmit)
 
         if not transmit:
@@ -579,7 +578,7 @@ class BaseCrossScaleDecoder(nn.Module):
             cb_loss *= mask
             kl_loss *= mask
 
-        return dec_refine, cm_loss, cb_loss, kl_loss
+        return dec_refine, cm_loss, cb_loss, kl_loss, indices
     
     def csvq_quantize(self, enc, dec, idx, vq, pre_fuse_net, Wh:int, Ww:int):
 
@@ -618,8 +617,6 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         post_fuse_net = nn.ModuleList([nn.Identity() for _ in range(max_streams-1)])
         self.pre_fuse_net, self.post_fuse_net = pre_fuse_net, post_fuse_net
 
-        # raise ValueError("fuse_net method must be in [cross_w_merge, cross_sw_merge, self_w_merge, self_sw_merge]")
-
         self.post_swin = SwinTransformerLayer(
                     self.out_h_dims[-1], self.out_h_dims[-1],
                     depth=swin_depth, num_heads=swin_heads[0],
@@ -627,45 +624,48 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                     subsample=None, is_causal=is_causal
         )# tag
 
-    def decode(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
+    def decode(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int, freeze_codebook: bool=False):
         """Step-wise Fuse decoding (Combines Quantize and Dequantize for Forward Training)
         Args: 
             enc_hs: a list of encoded features at multiple scale
             streams: number of bitstreams to use <= depth + 1
             vqs: a modulelist of quantizers with size $depth$
             Wh, Ww: encoder last feature size
+            freeze_codebook: boolean (True when no codebook is used in pretraining, in which streams=6)
         """
         assert streams <= self.max_streams and len(vqs) == self.max_streams
 
-
-        z0, cm_loss, cb_loss, kl_loss = vqs[0](enc_hs[-1])
-        if streams == 0:
-            z0, cm_loss, cb_loss, kl_loss = enc_hs[-1] + z0*0.0, cm_loss*0.0, cb_loss*0.0, kl_loss*0.0
+        z0, cm_loss, cb_loss, kl_loss, indices, _ = vqs[0](enc_hs[-1], freeze_codebook)
+        multi_codes = [indices]     # [(bs,G,T)]*streams
 
         dec_hs = [z0]
         for i, blk in enumerate(self.blocks):
             transmit = (i < streams-1)    
             if self.training:
-                dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i = self.csvq_layer(
+                dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i, indices_i = self.csvq_layer(
                                                     enc=enc_hs[-1-i], dec=dec_hs[i],
                                                     idx=i, vq=vqs[i+1], 
                                                     pre_fuse_net=self.pre_fuse_net,
                                                     post_fuse_net=self.post_fuse_net,
-                                                    Wh=Wh, Ww=Ww, transmit=transmit)
+                                                    Wh=Wh, Ww=Ww, transmit=transmit, freeze_codebook=freeze_codebook)
                 cm_loss += cm_loss_i
                 cb_loss += cb_loss_i
                 kl_loss += kl_loss_i
+                if indices_i is not None:
+                    multi_codes.append(indices_i)
             else:
                 if transmit:
-                    dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i = self.csvq_layer(
+                    dec_i_refine, cm_loss_i, cb_loss_i, kl_loss_i, indices_i = self.csvq_layer(
                                                             enc=enc_hs[-1-i], dec=dec_hs[i],
                                                             idx=i, vq=vqs[i+1], 
                                                             pre_fuse_net=self.pre_fuse_net,
                                                             post_fuse_net=self.post_fuse_net,
-                                                            Wh=Wh, Ww=Ww)
+                                                            Wh=Wh, Ww=Ww, freeze_codebook=freeze_codebook)
                     cm_loss += cm_loss_i
                     cb_loss += cb_loss_i
                     kl_loss += kl_loss_i
+                    if indices_i is not None:
+                        multi_codes.append(indices_i)
                 else:
                     dec_i_refine = dec_hs[i]
             
@@ -675,7 +675,7 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
         dec_next, Wh, Ww = self.post_swin(dec_next, Wh, Ww)
         recon_feat = self.patch_deembed(dec_next)
 
-        return recon_feat, dec_hs, cm_loss, cb_loss, kl_loss
+        return recon_feat, dec_hs, cm_loss, cb_loss, kl_loss, multi_codes
     
     def quantize(self, enc_hs: list, streams: int, vqs: nn.ModuleList, Wh: int, Ww: int):
         """Step-wise Compression (Quantize to code for Inference)
@@ -754,78 +754,6 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                 )
             )
         return blocks
-    
-    def init_swin_merge_blocks(self, max_streams, window_size, h_dims, fuse_attn_heads:list, mlp_ratio, is_causal, shift_wa=False):
-
-        if len(fuse_attn_heads) == 1:
-            num_heads = fuse_attn_heads[0]
-            num_heads = [min(num_heads*2**(len(self.h_dims)-i-1), num_heads*2**3) for i in range(len(self.h_dims))]
-        else:
-            num_heads = fuse_attn_heads[::-1]
-
-        pre_fuse_net, post_fuse_net = [], []
-        for i in range(max_streams-1):
-            pre_block = SwinTransformerLayer(
-                h_dims[i]*2,
-                h_dims[i],
-                depth=2 if shift_wa else 1,
-                num_heads=num_heads[i],
-                window_size=window_size,
-                mlp_ratio=mlp_ratio,
-                subsample="down",
-                scale_factor=[1,1],
-                is_causal=is_causal
-            )
-            post_block = SwinTransformerLayer(
-                h_dims[i]*2,
-                h_dims[i],
-                depth=2 if shift_wa else 1,
-                num_heads=num_heads[i],
-                window_size=window_size,
-                mlp_ratio=mlp_ratio,
-                subsample="down",
-                scale_factor=[1,1],
-                is_causal=is_causal
-            )
-            pre_fuse_net.append(pre_block)
-            post_fuse_net.append(post_block)
-
-        return nn.ModuleList(pre_fuse_net), nn.ModuleList(post_fuse_net)
-
-    def init_w_attn_fuse_blocks(self, max_streams, window_size, h_dims, f_dims, fuse_attn_heads: list, shift_wa=False):
-        
-        if len(fuse_attn_heads) == 1:
-            num_heads = fuse_attn_heads[0]
-            num_heads = [min(num_heads*2**(len(self.h_dims)-i-1), num_heads*2**3) for i in range(len(self.h_dims))]
-        else:
-            num_heads = fuse_attn_heads[::-1]
-
-        shift_size = window_size//2
-        pre_fuse_net, post_fuse_net = [], []
-        for i in range(max_streams-1):
-            if shift_wa:
-                pre_block = nn.Sequential(*[
-                    WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i], 
-                                    num_heads=num_heads[i], window_size=window_size, shift_size=0),
-                    WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i],
-                                    num_heads=num_heads[i], window_size=window_size, shift_size=shift_size)
-                    ]
-                )
-                post_block = nn.Sequential(*[
-                    WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i], 
-                                    num_heads=num_heads[i], window_size=window_size, shift_size=0),
-                    WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i],
-                                    num_heads=num_heads[i], window_size=window_size, shift_size=shift_size)
-                ])
-            else:
-                pre_block = WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i], 
-                                            num_heads=num_heads[i], window_size=window_size, shift_size=0)
-                post_block = WindowAlignment(freq_size=f_dims[i], d_model=h_dims[i], 
-                                            num_heads=num_heads[i], window_size=window_size, shift_size=0)
-            pre_fuse_net.append(pre_block)
-            post_fuse_net.append(post_block)
-        
-        return nn.ModuleList(pre_fuse_net), nn.ModuleList(post_fuse_net)
 
     def vis_decoder(self):
         
@@ -835,23 +763,61 @@ class SwinCrossScaleDecoder(BaseCrossScaleDecoder):
                 i, blk.depth, blk.swint_blocks[0].d_model, blk.swint_blocks[0].num_heads, blk.subsample!=None
             ))
 
-            if self.fuse_net in ["cross_w_merge", "cross_sw_merge"]:
-                if i < len(self.pre_fuse_net):
-                    fuse_mod = self.pre_fuse_net[i]
-                    print("Cross Fuse Net: swin_hidden={} heads={}".format(
-                    fuse_mod.attn.dim, fuse_mod.attn.num_heads
-                ))
-            elif self.fuse_net in ["self_w_merge", "self_sw_merge"]:
-                if i < len(self.pre_fuse_net):
-                    fuse_mod = self.pre_fuse_net[i]
-                    print("Self Fuse Net: swin_depth={} swin_hidden={} heads={} up={}".format(
-                    fuse_mod.depth, fuse_mod.swint_blocks[0].d_model, fuse_mod.swint_blocks[0].num_heads, blk.subsample!=None
-                ))
-
         blk = self.post_swin
         print("Post-swin Layer: swin_depth={} swin_hidden={} heads={} up={}".format(
                 blk.depth, blk.swint_blocks[0].d_model, blk.swint_blocks[0].num_heads, blk.subsample!=None
             ))
+
+
+class SwinDecoder(nn.Module):
+    def __init__(self, 
+                 swin_depth: int = 2,
+                 swin_heads: list = [3],
+                 window_size: int = 4,
+                 mlp_ratio: float = 4.,
+                 in_freq: int = 192, 
+                 patch_size: list = [3,2], 
+                 in_dim: int = 2, 
+                 h_dims: list = [384,192,96,72,45,45], 
+                 is_causal: bool = False,) -> None:
+        super().__init__()
+
+        self.patch_deembed = PatchDeEmbed(in_freq, patch_size, in_dim, h_dims[-1])
+        self.h_dims = h_dims[:-1]
+        self.out_h_dims = h_dims[1:]
+        self.blocks = self.init_decoder(swin_depth, swin_heads, window_size, mlp_ratio, is_causal)
+
+        self.post_swin = SwinTransformerLayer(
+                    self.out_h_dims[-1], self.out_h_dims[-1],
+                    depth=swin_depth, num_heads=swin_heads[0],
+                    window_size=window_size, mlp_ratio=mlp_ratio,
+                    subsample=None, is_causal=is_causal
+        )# tag
+
+    def init_decoder(self, depth, num_heads: list, window_size, mlp_ratio, is_causal):
+       
+        if len(num_heads) == 1:
+            num_heads = num_heads[0]
+            num_heads = [min(num_heads*2**(len(self.h_dims)-i-1), num_heads*2**3) for i in range(len(self.h_dims))]
+        else:
+            num_heads = num_heads[::-1]
+
+        blocks = nn.ModuleList()
+        for i in range(len(self.h_dims)):
+            blocks.append(
+                SwinTransformerLayer(
+                    self.h_dims[i],
+                    self.out_h_dims[i],
+                    depth=depth,
+                    num_heads=num_heads[i],
+                    window_size=window_size,
+                    mlp_ratio=mlp_ratio,
+                    subsample="up",
+                    scale_factor=[2,1],
+                    is_causal=is_causal
+                )
+            )
+        return blocks
 
 if __name__ == "__main__":
     import os, yaml

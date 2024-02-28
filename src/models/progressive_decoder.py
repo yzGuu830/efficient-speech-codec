@@ -41,7 +41,7 @@ class BaseCrossScaleDecoder(nn.Module):
         residual_q *= alpha
         cm_loss, cb_loss, kl_loss = cm_loss*alpha, cb_loss*alpha, kl_loss*alpha
 
-        dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, alpha, transmit)
+        dec_refine = self.post_fuse(residual_q, dec, idx, post_fuse_net, transmit)
 
         if not transmit:
             mask = torch.full((dec.shape[0],), fill_value=False, device=dec.device)

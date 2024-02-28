@@ -3,8 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from torch.nn.utils import weight_norm
-
 
 class Codebook(nn.Module):
     def __init__(self, 
@@ -23,7 +21,6 @@ class Codebook(nn.Module):
         self.embedding = nn.Embedding(num_embedding, embedding_size)
 
         self.use_cosine_sim = use_cosine_sim
-
         self.proj = (input_size != embedding_size)
         if self.proj:
             self.proj_down = (
@@ -68,26 +65,35 @@ class Codebook(nn.Module):
 
         return z_q
 
-    def forward(self, z):
+    def forward(self, z, freeze_codebook=False):
         """ Forward Training
             z: [bs, T, embedding_size]
             z_q: [bs, T, embedding_size]^
+            freeze_codebook: boolean (True during warmup stage, no vqs are updated)
         """
 
         z_e = self.proj_down(z) if self.proj else z
 
-        code = self.quantize_to_code(z_e)
-        z_q = self.dequantize_code(code)
+        if freeze_codebook:
+            code = self.quantize_to_code(z_e)
+            z_q = self.dequantize_code(code)
 
-        commitment_loss = F.mse_loss(z_q.detach(), z_e, reduction="none").mean([1, 2])
-        codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
+            z_q = z_e + z_q*0.0
+            commitment_loss = torch.zeros(z.size(0),device=z.device)
+            codebook_loss = torch.zeros(z.size(0),device=z.device)
+        else:
+            code = self.quantize_to_code(z_e)
+            z_q = self.dequantize_code(code)
 
-        if self.training:
-            z_q = z_e + (z_q - z_e).detach()
+            commitment_loss = F.mse_loss(z_q.detach(), z_e, reduction="none").mean([1, 2])
+            codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
+
+            if self.training:
+                z_q = z_e + (z_q - z_e).detach()
         
         z_q = self.proj_up(z_q) if self.proj else z_q
 
-        return z_q, commitment_loss, codebook_loss, code
+        return z_q, commitment_loss, codebook_loss, code, z_e
     
     def encode(self, z):
         z_in = self.proj_down(z) if self.proj else z
@@ -98,7 +104,6 @@ class Codebook(nn.Module):
         z_q = self.dequantize_code(code)
         z_q_out = self.proj_up(z_q) if self.proj else z_q
         return z_q_out
-
 
 def count_posterior(code, codebook_size):
     """ Compute the posterior codebook distribution P(q|e) on a total batch of encoded features
@@ -112,97 +117,6 @@ def count_posterior(code, codebook_size):
     posterior = counts / code.size(1)
 
     return posterior
-
-
-
-class VectorQuantize(nn.Module):
-    """
-    Implementation of VQ similar to Karpathy's repo:
-    https://github.com/karpathy/deep-vector-quantization
-    Additionally uses following tricks from Improved VQGAN
-    (https://arxiv.org/pdf/2110.04627.pdf):
-        1. Factorized codes: Perform nearest neighbor lookup in low-dimensional space
-            for improved codebook usage
-        2. l2-normalized codes: Converts euclidean distance to cosine similarity which
-            improves training stability
-    """
-
-    def __init__(self, input_dim: int, codebook_size: int, codebook_dim: int):
-        super().__init__()
-        self.codebook_size = codebook_size
-        self.codebook_dim = codebook_dim
-
-        self.in_proj = weight_norm(
-                nn.Linear(input_dim, codebook_dim, bias=False)
-            )
-        self.out_proj = weight_norm(
-                nn.Linear(codebook_dim, input_dim, bias=False)
-            )
-        self.codebook = nn.Embedding(codebook_size, codebook_dim)
-
-    def forward(self, z):
-        """Quantized the input tensor using a fixed codebook and returns
-        the corresponding codebook vectors
-
-        Parameters
-        ----------
-        z : Tensor[B x T x D]
-
-        Returns
-        -------
-        Tensor[B x T x D]
-            Quantized continuous representation of input
-        Tensor[1]
-            Commitment loss to train encoder to predict vectors closer to codebook
-            entries
-        Tensor[1]
-            Codebook loss to update the codebook
-        Tensor[B x T]
-            Codebook indices (quantized discrete representation of input)
-        Tensor[B x T x D]
-            Projected latents (continuous representation of input before quantization)
-        """
-
-        # Factorized codes (ViT-VQGAN) Project input into low-dimensional space
-        z_e = self.in_proj(z)  # z_e : (B x T x D)
-        print("down z: ", z_e)
-        z_q, indices = self.decode_latents(z_e)
-
-        commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
-        codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
-
-        z_q = (
-            z_e + (z_q - z_e).detach()
-        )  # noop in forward pass, straight-through gradient estimator in backward pass
-
-        z_q = self.out_proj(z_q)
-
-        return z_q, commitment_loss, codebook_loss, indices, z_e
-
-    def embed_code(self, embed_id):
-        return F.embedding(embed_id, self.codebook.weight)
-
-    def decode_code(self, embed_id):
-        return self.embed_code(embed_id).transpose(1, 2)
-
-    def decode_latents(self, latents):
-        encodings = rearrange(latents, "b t d -> (b t) d")
-        codebook = self.codebook.weight  # codebook: (N x D)
-
-        # L2 normalize encodings and codebook (ViT-VQGAN)
-        encodings = F.normalize(encodings)
-        codebook = F.normalize(codebook)
-
-        # Compute euclidean distance with codebook
-        dist = (
-            encodings.pow(2).sum(1, keepdim=True)
-            - 2 * encodings @ codebook.t()
-            + codebook.pow(2).sum(1, keepdim=True).t()
-        )
-        print("dist: ", dist)
-        indices = rearrange((-dist).max(1)[1], "(b t) -> b t", b=latents.size(0))
-        z_q = self.decode_code(indices)
-        return z_q, indices
 
 
 

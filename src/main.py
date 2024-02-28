@@ -2,9 +2,11 @@ import yaml, os, argparse
 from utils import dict2namespace
 from scripts.ddp_trainer import main as ddp_main
 from scripts.dp_trainer import main as dp_main
-from scripts.trainer_with_adv import main as dp_main_adv
+from scripts.trainer_with_adv_vq_init import main as main_with_adv_init
 from scripts.trainer_no_adv import main as dp_main_no_adv
 from scripts.progressive_trainer import main as progressive_main
+from scripts.trainer_no_adv_vq_init import main as main_no_adv_init
+
 import torch.multiprocessing as mp
 import warnings
 warnings.filterwarnings("ignore")
@@ -18,13 +20,14 @@ def parse_args_and_config():
     parser.add_argument("--parallel", default="ddp", type=str)
     parser.add_argument('--wb_exp_name', type=str, default='swin-18k', help='WandB exp name')
     parser.add_argument('--wb_project_name', type=str, default=None, help='WandB project name')
-    parser.add_argument("--save_dir", type=str, default="/root/autodl-fs/output")
+    parser.add_argument("--save_dir", type=str, default="/root/autodl-tmp/output")
     parser.add_argument("--adv_training", action="store_true")
     parser.add_argument("--q_dropout_rate", type=float, default=1.0)
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--trans_on_cpu", action="store_true")
     parser.add_argument("--training_fractions", nargs="+", default=[0.125,0.625,0.25], type=float)
     parser.add_argument("--save_steps", nargs="+", type=int, default=[50000, 100000, 200000, 250000, 350000, 400000])
+    parser.add_argument("--pretrain_epochs", type=int, default=10)
 
     # Train & Test
     parser.add_argument("--num_epochs", type=int, default=80)
@@ -60,24 +63,20 @@ if __name__ == "__main__":
 
     elif args.parallel == 'accel': # Use accelerate library
         if args.adv_training:
-            dp_main_adv(args, config)
+            main_with_adv_init(args, config)
         else:
             dp_main_no_adv(args, config)
 
     elif args.parallel == 'accel_pro':
         progressive_main(args, config)
+
+    elif args.parallel == 'accel_train_fast_vq':
+        if args.adv_training:
+            main_with_adv_init(args, config)
+        else:
+            main_no_adv_init(args, config)
+            
 """
-python main.py \
-    --config residual_9k_pro.yml \
-    --seed 53 \
-    --wb_exp_name swin-6k-residual-dropout \
-    --num_epochs 80 \
-    --lr 1.0e-4 \
-    --train_bs_per_device 18 \
-    --test_bs_per_device 16 \
-    --parallel accel_pro \
-    --save_dir ./runs \
-    --q_dropout_rate .5
 
 ## Baseline ## [done]
 python main.py \

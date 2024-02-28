@@ -1,9 +1,15 @@
 import torch
 import torch.nn as nn
 from einops import rearrange
+
+import sys
+sys.path.append("/Users/tracy/Library/CloudStorage/GoogleDrive-cloudstorage.yuzhe@gmail.com/My Drive/Research/Audio_Signal_Coding/Deep-Audio-Signal-Coding/src")
+
 from models.vq.codebook import Codebook, CodebookEMA, count_posterior
 from models.vq.finite_scalar_quantize import FSQ
 from models.losses.generator import KLDivergenceLoss
+from models.vq.kmeans_init import codebook_init_forward_hook_gvq
+
 
 kl_loss_fc = KLDivergenceLoss(prior="uniform")
 
@@ -63,8 +69,6 @@ class FiniteSQ(nn.Module):
         assert z_q.size(2)==self.in_dim, "z_q shape isn't correct"
 
         return z_q
-
-
 
 class ResidualVQ(nn.Module):
     def __init__(self, 
@@ -174,6 +178,7 @@ class ResidualVQ(nn.Module):
 
         return z_q
 
+
 class GroupVQ(nn.Module):
 
     def __init__(self, 
@@ -185,7 +190,8 @@ class GroupVQ(nn.Module):
                 codebook_dim: int = 8,
                 codebook_size: int = 1024, 
                 use_ema: bool = False,
-                use_cosine_sim: bool = True,) -> None:
+                use_cosine_sim: bool = True,
+                kmeans_init: bool=False) -> None:
         super().__init__()
 
         codebook = Codebook if not use_ema else CodebookEMA
@@ -210,27 +216,39 @@ class GroupVQ(nn.Module):
                                         ) 
                                     for in_dim in self.vq_dims
                                 ]) 
-        
         self.codebook_size = codebook_size
+        self.kmeans_init = kmeans_init
+        self.verbose_init = False # set to True for verbose after initialize the GroupVQ Module
 
-    def forward(self, z):
-        
+        if self.kmeans_init is not None: # no initialization when set to None
+            self.register_buffer('codebook_initialized', torch.zeros(1))
+            self.register_forward_hook(codebook_init_forward_hook_gvq)
+
+    def forward(self, z, freeze_codebook=False):
+        """
+        Args: 
+            z: Tensor of size [bs, H*T, C]
+        """
         dim = z.dim()
-
         z = self.pre_process(z)
         z_q, codebook_loss, commitment_loss, kl_loss = [], 0, 0, 0
-
+        indices = []
+        z_e = []
+        
         s_idx = 0
         for i in range(len(self.vq_dims)):
             e_idx = s_idx + self.vq_dims[i]
             z_i = z[:, :, s_idx:e_idx]
 
-            z_q_i, cm_loss, cb_loss, code = self.vqs[i](z_i)
+            z_q_i, cm_loss, cb_loss, code, z_e_i = self.vqs[i](z_i, freeze_codebook)
 
             posterior = count_posterior(code, self.codebook_size)
             kl = kl_loss_fc(posterior)
 
+            indices.append(code)
             z_q.append(z_q_i)
+            z_e.append(z_e_i)
+
             commitment_loss += cm_loss
             codebook_loss += cb_loss
             kl_loss += kl
@@ -239,8 +257,10 @@ class GroupVQ(nn.Module):
         
         z_q = torch.cat(z_q, dim=-1)
         z_q_ = self.post_process(z_q, dim=dim)
+        indices = torch.stack(indices, dim=1) # bs, Group_size, T
+        z_e = torch.stack(z_e, dim=1) # bs, Group_size, T, codebook_dim
 
-        return z_q_, commitment_loss/len(self.vq_dims), codebook_loss/len(self.vq_dims), kl_loss/len(self.vq_dims)
+        return z_q_, commitment_loss/len(self.vq_dims), codebook_loss/len(self.vq_dims), kl_loss/len(self.vq_dims), indices, z_e
 
     def pre_process(self, z):
         """
@@ -260,7 +280,6 @@ class GroupVQ(nn.Module):
             raise ValueError("dim of z is not correct")
 
         W = z.size(1)
-
         if self.proj_ratio < 1.0:
             z = self.in_proj(z)
 
@@ -355,29 +374,44 @@ def get_multiple(n, d=6):
 
 if __name__ == "__main__":
 
-    vq = GroupVQ(in_dim=64,
-                H=12, 
-                proj=2,
-                overlap=4,
-                num_vqs=6, 
+    gvq = GroupVQ(
+                in_dim=384,
+                H=2, 
+                overlap=2,
+                num_vqs=3, 
+                proj_ratio=1.0,
+                codebook_dim=12,
                 codebook_size=1024, 
-                vq_commit= .25)
-    vq.eval()
-    print("Test Conv: ")
-    with torch.inference_mode():
-        z = torch.randn(1, 64, 12, 600)
-        z_q, vq_loss = vq(z)
-        codes = vq.encode(z)
-        z_q_test = vq.decode(codes, dim=4)
-        print(z_q.shape, z_q_test.shape, vq_loss)
-        print(z_q-z_q_test)
+                use_ema=False,
+                use_cosine_sim=True,
+                kmeans_init=False)
+
+    gvq.verbose_init = True
+
+    print("First Pass")
+    z = torch.randn(9, 2*300, 384)
+    z_q_, cm_loss, cb_loss, kl_loss, indices, z_e = gvq(z)
+
+    print("Second Pass")
+    z_1 = torch.randn(9, 2*300, 384)
+    z_q_, cm_loss, cb_loss, kl_loss, indices, z_e = gvq(z_1)
+
+    # vq.eval()
+    # print("Test Conv: ")
+    # with torch.inference_mode():
+    #     z = torch.randn(1, 64, 12, 600)
+    #     z_q, vq_loss = vq(z)
+    #     codes = vq.encode(z)
+    #     z_q_test = vq.decode(codes, dim=4)
+    #     print(z_q.shape, z_q_test.shape, vq_loss)
+    #     print(z_q-z_q_test)
 
 
-    print("Test Swin")
-    with torch.inference_mode():
-        z = torch.randn(1, 12*600, 64)
-        z_q, vq_loss = vq(z)
-        codes = vq.encode(z)
-        z_q_test = vq.decode(codes, dim=3)
-        print(z_q.shape, z_q_test.shape, vq_loss)
-        print(z_q-z_q_test)
+    # print("Test Swin")
+    # with torch.inference_mode():
+    #     z = torch.randn(1, 12*600, 64)
+    #     z_q, vq_loss = vq(z)
+    #     codes = vq.encode(z)
+    #     z_q_test = vq.decode(codes, dim=3)
+    #     print(z_q.shape, z_q_test.shape, vq_loss)
+    #     print(z_q-z_q_test)
