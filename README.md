@@ -1,6 +1,8 @@
-# Neural-Speech-Coding
+# ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
-A Pytorch implementation of scalable cross-scaled audio codec with shifted-window transformers
+A PyTorch implementation of [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing)
+
+![An illustration of ESC Architecture](assets/architecture.png){width="630"}
 
 ### Training
 
@@ -21,8 +23,7 @@ python src/main.py \
     --num_worker 4
 ```
 
-
-
+````{=html}
 <!-- ### Inference
 
 Use the following script to make a compression inference.
@@ -38,7 +39,9 @@ python eval/test_codec.py \
 ```
 
 You can specify a fixed bitrate by removing ---multiscale and set ---kbps from [3, 6, 9, 12, 15, 18] -->
+````
 
+```{=html}
 <!-- ### Results
 
 Our Codec performance evaluated over DNS-Challenge Dataset is plotted below. We compared our swin-based codec with Jiang et, al. (2022), who invented the cross-scale vector quantization schema that has inspired our work.
@@ -46,3 +49,4 @@ Our Codec performance evaluated over DNS-Challenge Dataset is plotted below. We 
 ![](assets/test_result_curve.jpg)
 
 You can also investigate a test instance of our codec [here](https://western-spatula-93a.notion.site/Swin-T-Cross-Scale-Audio-Codec-Evaluated-Instances-b9cf99937b794973a95344d834f594a8?pvs=4), where we provide multi-scale reconstructed audios, as well as spectrogram plots with metrics specified. -->
+```
