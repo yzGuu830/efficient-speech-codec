@@ -49,12 +49,21 @@ class BaseAudioCodec(nn.Module):
         freq_patch, time_patch = patch_size
         H = self.in_freq//freq_patch
 
+        if init_method == "kaiming": 
+            kmeans_init = None
+        elif init_method == "kmeans": # requires pretraining
+            kmeans_init = True
+        elif init_method == "randomfill": # requires pretraining
+            kmeans_init = False
+        else:
+            raise ValueError("\{kmeans_init\} should be in (kaiming, kmeans, randomfill)")
+
         quantizers = nn.ModuleList()
         quantizers.append(
                 ProductVectorQuantize( # VQ at bottom
                     in_dim=self.dec_h_dims[0], in_freq=H//2**(self.max_streams-1), 
                     overlap=overlap, num_vqs=group_size, codebook_dim=codebook_dims[0],
-                    codebook_size=codebook_size, l2norm=l2norm, kmeans_init=(init_method=="kmeans")
+                    codebook_size=codebook_size, l2norm=l2norm, kmeans_init=kmeans_init
                 )
             ) 
         for i in range(1, self.max_streams):
@@ -62,7 +71,7 @@ class BaseAudioCodec(nn.Module):
                 ProductVectorQuantize(
                     in_dim=self.dec_h_dims[i-1], in_freq=H//2**(self.max_streams-i),
                     overlap=overlap, num_vqs=group_size, codebook_dim=codebook_dims[i],
-                    codebook_size=codebook_size, l2norm=l2norm, kmeans_init=(init_method=="kmeans")
+                    codebook_size=codebook_size, l2norm=l2norm, kmeans_init=kmeans_init
                 )
             ) 
         
@@ -99,7 +108,7 @@ class ESC(BaseAudioCodec):
                     patch_size, overlap, group_size, codebook_dims, codebook_size, l2norm, init_method
                 )
         self.encoder = Encoder(in_freq, in_dim, h_dims, tuple(patch_size), swin_heads, swin_depth, window_size, mlp_ratio)
-        self.decoder = Decoder(in_freq, in_dim, h_dims, tuple(patch_size), swin_heads, swin_depth, window_size, mlp_ratio)
+        self.decoder = Decoder(in_freq, in_dim, h_dims[::-1], tuple(patch_size), swin_heads[::-1], swin_depth, window_size, mlp_ratio)
 
     def forward_one_step(self, x, x_feat=None, num_streams=6, freeze_codebook=False):
         if x_feat is None:
@@ -135,7 +144,6 @@ class ESC(BaseAudioCodec):
         
     @torch.no_grad()
     def encode(self, x, num_streams=6):
-        self.eval()
         x_feat = self.spec_transform(x)
         enc_hs, H, W = self.encoder(x_feat)
         codes = self.decoder.encode(enc_hs, num_streams, self.quantizers, (H,W))
@@ -143,7 +151,6 @@ class ESC(BaseAudioCodec):
     
     @torch.no_grad()
     def decode(self, codes, feat_shape=(2,300)):
-        self.eval()
         dec_hs = self.decoder.decode(codes, self.quantizers, feat_shape)
         recon_feat = dec_hs[-1]
         recon_x = self.audio_reconstruct(recon_feat)
@@ -165,7 +172,7 @@ class Encoder(nn.Module):
                  window_size: int,
                  mlp_ratio: float,
                  ) -> None:
-        super().__init__(in_dim, h_dims)
+        super().__init__()
         
         self.patch_embed = PatchEmbed(in_freq, in_dim, patch_size, embed_dim=h_dims[0])
         in_dims, out_dims = h_dims[:-1], h_dims[1:]
@@ -175,7 +182,7 @@ class Encoder(nn.Module):
         self.patch_size = patch_size
 
         blocks = nn.ModuleList()
-        for i in range(len(self.h_dims)):
+        for i in range(len(in_dims)):
             blocks.append(
                 TransformerLayer(
                     in_dims[i], out_dims[i], swin_heads[i], swin_depth, window_size, mlp_ratio, 
@@ -193,7 +200,7 @@ class Encoder(nn.Module):
         Wh, Ww = x.size(2)//self.patch_size[0], x.size(3)//self.patch_size[1]
         x = self.patch_embed(x)                 # B C Wh Ww
         x, Wh, Ww = self.pre_swin(x, Wh, Ww)    # B C Wh Ww
-        
+
         enc_hs = [x]
         for blk in self.blocks:
             x, Wh, Ww = blk(x, Wh, Ww)
@@ -276,12 +283,12 @@ class Decoder(CrossScaleDecoder):
         in_dims, out_dims = h_dims[:-1], h_dims[1:]
                 
         self.post_swin = TransformerLayer(
-                    h_dims[-1], h_dims[-1], swin_heads[0], swin_depth, window_size, mlp_ratio, 
+                    h_dims[-1], h_dims[-1], swin_heads[-1], swin_depth, window_size, mlp_ratio, 
                     activation=nn.GELU, norm_layer=nn.LayerNorm, scale=None
                     )
 
         blocks = nn.ModuleList()
-        for i in range(len(self.h_dims)):
+        for i in range(len(in_dims)):
             blocks.append(
                 TransformerLayer(
                     in_dims[i], out_dims[i], swin_heads[i], swin_depth, window_size, mlp_ratio, 
@@ -299,6 +306,12 @@ class Decoder(CrossScaleDecoder):
             quantizers: a modulelist of multi-scale quantizers
             feat_shape: (Wh, Ww) feature shape at bottom level
             freeze_codebook: boolean (True when no codebook is used in pretraining)
+            returns: 
+                recon_feat: reconstructed complex spectrum (B,2,F,T)
+                dec_hs: list of decoded hidden states
+                codes: discrete indices (B,num_streams,group_size,T//overlap) 
+                       num_streams is always max_stream in training mode
+                cm_loss, cb_loss: VQ losses (B,)
         """
         Wh, Ww = feat_shape
         z0, cm_loss, cb_loss, code = self.csrvq(enc=enc_hs[-1], dec=0.0, vq=quantizers[0], 
@@ -376,9 +389,11 @@ class Decoder(CrossScaleDecoder):
 
         z0 = quantizers[0].decode(codes[:, 0])
         dec_hs = [z0]
-        for i in range(num_streams-1): # using code of residuals to refine decoding
-            dec_i_refine = self.csrvq_decode(codes=codes[:, i+1], dec=dec_hs[i], vq=quantizers[i+1])
-
+        for i in range(len(self.blocks)): # using code of residuals to refine decoding
+            if i < num_streams-1:
+                dec_i_refine = self.csrvq_decode(codes=codes[:, i+1], dec=dec_hs[i], vq=quantizers[i+1])
+            else:
+                dec_i_refine = dec_hs[i]
             dec_next, Wh, Ww = self.blocks[i](dec_i_refine, Wh, Ww)
             dec_hs.append(dec_next)
 
@@ -399,5 +414,8 @@ class Decoder(CrossScaleDecoder):
             ))
 
 def make_model(model_config):
-    model = ESC(**vars(model_config))
+    if isinstance(model_config, dict):
+        model = ESC(**model_config)
+    else:
+        model = ESC(**vars(model_config))
     return model

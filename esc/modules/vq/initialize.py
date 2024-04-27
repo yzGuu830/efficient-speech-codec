@@ -12,11 +12,11 @@ def codebook_init_forward_hook_pvq(self, input, output):
 
 	if self.verbose_init is True:
 		if self.kmeans_init is None:
-			print("Initializing Group VQs with KaimingNormal")
+			print("Initializing Product VQs with KaimingNormal")
 		elif self.kmeans_init is True:
-			print('Initializing Group VQs with k-means++')
+			print('Initializing Product VQs with k-means++')
 		elif self.kmeans_init is False:
-			print('Initializing Group VQs by randomly choosing from z_e')
+			print('Initializing Product VQs by randomly choosing from z_e')
 
 	outputs, _ = output
 	_, z_e_downs, _ = outputs

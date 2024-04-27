@@ -30,12 +30,11 @@ class ProductVectorQuantize(nn.Module):
         
         self.kmeans_init = kmeans_init
         self.verbose_init = False # True for verbosing after initialization
-        if self.kmeans_init is not None: 
-            # random initialization when set to None
-            # initialized by kaiming normal by default (set to False)
-            # initialized by kmeans after pre-training (set to True)
-            self.register_buffer('codebook_initialized', torch.zeros(1))
-            self.register_forward_hook(codebook_init_forward_hook_pvq)
+        self.register_buffer('codebook_initialized', torch.zeros(1)) 
+        # random initialization when set to None
+        # initialized by kaiming normal by default (set to False)
+        # initialized by kmeans after pre-training (set to True)
+        self.register_forward_hook(codebook_init_forward_hook_pvq)
 
     def forward(self, z_e, freeze=False):
         """ Product VQ Forwrd Function.

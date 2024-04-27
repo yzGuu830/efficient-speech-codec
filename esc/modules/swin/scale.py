@@ -7,7 +7,7 @@ def pixel_unshuffle(input, downscale_factor:tuple=(2,1)):
     B, H, W, C = input.size()
     C_, H_, W_ = C*(s1*s2), H//s1, W//s2
 
-    unshuffle_out = input.reshape(B, H, s1, W, s2, C).\
+    unshuffle_out = input.reshape(B, H_, s1, W_, s2, C).\
         permute(0,1,3,2,4,5).reshape(B, H_, W_, C_)
     return unshuffle_out
 
@@ -91,7 +91,6 @@ class PatchMerge(nn.Module):
         """
         
         x = rearrange(x, "b (h w) c -> b h w c", h=H)
-
         pad_input = (H%2 == 1)
         if pad_input:
             x = nn.functional.pad(x, (0,0,0,0,0,H%2))
