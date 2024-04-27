@@ -1,0 +1,33 @@
+data:
+    data_dir: "/root/autodl-tmp/data"
+    in_freq: 192
+    win_len: 20
+    hop_len: 5
+    sr: 16000
+
+model:
+    in_dim: 2
+    in_freq: 192
+    h_dims: [45,72,96,144,192,384]
+    max_streams: 6
+    win_len: 20
+    hop_len: 5
+    sr: 16000
+    patch_size: [3,2]
+    swin_heads: [3,6,12,24,24]
+    swin_depth: 2
+    window_size: 4
+    mlp_ratio: 4.
+    overlap: 2
+    group_size: 3
+    codebook_size: 1024
+    codebook_dims: [32,32,16,12,8,6]
+    l2norm: True
+    init_method: kaiming
+
+loss:
+    recon_factor: 1.0
+    commitment_factor: .25
+    codebook_factor: 1.0
+    mel_factor: .25
+    reg_factor: 0.0
