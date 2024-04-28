@@ -1,8 +1,8 @@
 # ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
-A PyTorch implementation of [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing)
+This is the code repository for the Efficient Speech Codec presented in the paper [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing)
 
-![An illustration of ESC Architecture](assets/architecture.png){width="630"}
+![An illustration of ESC Architecture](assets/architecture.png)
 
 ### Training
 
