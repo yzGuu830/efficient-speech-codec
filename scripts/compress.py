@@ -47,10 +47,4 @@ python -m scripts.compress \
     --num_streams 6 \
     --device cpu 
 
-python -m scripts.compress \
-    --input /Users/tracy/Desktop/Checkpoints/ESC/evaluation_set/test/clip_1.wav \
-    --save_path ./output \
-    --model_path /Users/tracy/Desktop/esc9kbps \
-    --num_streams 6 \
-    --device cpu 
 """

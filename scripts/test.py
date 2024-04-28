@@ -104,10 +104,4 @@ python -m scripts.test \
     --model_path ./esc9kbps \
     --device cuda
 
-python -m scripts.test \
-    --eval_folder_path /Users/tracy/Desktop/Checkpoints/ESC/evaluation_set/test \
-    --batch_size 4 \
-    --model_path /Users/tracy/Desktop/esc9kbps \
-    --device cpu
-
 """
