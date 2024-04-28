@@ -1,6 +1,6 @@
 # ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
-This is the code repository for the ESC presented in the [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing) paper. Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining comparative reconstruction quality to Descript's audio codec. We provide [model checkpoint](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and [Demo Page]()
+This is the code repository for the ESC presented in the [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing) paper. Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining comparative reconstruction quality to Descript's audio codec. We provide [Model Checkpoints](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and a [Demo Page]()
 
 ![An illustration of ESC Architecture](assets/architecture.png)
 
@@ -13,12 +13,7 @@ pip install -r requirements.txt
 
 ### To compress and decompress audio
 ```bash
-python -m scripts.compress \
-    --input /path/to/input.wav \
-    --save_path /path/to/output \
-    --model_path /path/to/model \
-    --num_streams 6 \
-    --device cpu 
+python -m scripts.compress  --input /path/to/input.wav --save_path /path/to/output --model_path /path/to/model --num_streams 6 --device cpu 
 ```
 This will create `.pth` and `.wav` files (code and reconstructed audio) under `save_path`. Our codec supports `num_streams` from 1 to 6, corresponding to 1.5 ~ 9.0kbps bitrates. 
 
@@ -64,16 +59,11 @@ We use `accelerate` library to handle distributed training. Logging is processed
 ### Evaluation
 
 ```bash
-python -m scripts.test \
-    --eval_folder_path path/to/data \
-    --batch_size 12 \
-    --model_path /path/to/model \
-    --device cuda
+python -m scripts.test --eval_folder_path path/to/data --batch_size 12 --model_path /path/to/model --device cuda
 ```
 This will run codec evaluation at all bandwidth on a test set folder. We provide four metrics for reporting: `PESQ`, `Mel Distance`, `SI-SDR` and `Bitrate Utilization Rate`. The evaluation statistics will be saved into `model_path` by default.  
-
 
 ## Results
 
 ![Performance Evaluation](assets/results.png)
-We provide a comprehensive performance comparison with Descript's audio codec (DAC) at different scales of model sizes. 
+We provide a performance comparison with Descript's audio codec (DAC) at different scales of model sizes. 
