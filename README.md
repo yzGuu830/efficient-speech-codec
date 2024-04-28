@@ -7,12 +7,12 @@ This is the code repository for the ESC presented in the [ESC: High-Fidelity Spe
 ## Usage
 
 ### Install Dependencies
-```{python}
+```bash
 pip install -r requirements.txt
 ```
 
 ### To compress and decompress audio
-```{python}
+```bash
 python -m scripts.compress \
     --input /path/to/input.wav \
     --save_path /path/to/output \
@@ -46,7 +46,7 @@ This is the programmatic usage of esc to compress audio tensors.
 ### Training
 
 We provide our developmental training and evaluation [dataset](https://huggingface.co/datasets/Tracygu/dnscustom/tree/main) on huggingface.
-```python
+```bash
 accelerate launch main.py \
     --exp_name esc9kbps \
     --config_path ./configs/9kbps_final.yaml
@@ -63,7 +63,7 @@ We use `accelerate` library to handle distributed training. Logging is processed
 
 ### Evaluation
 
-```{python}
+```bash
 python -m scripts.test \
     --eval_folder_path path/to/data \
     --batch_size 12 \
