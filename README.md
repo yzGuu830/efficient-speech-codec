@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 
 ### To compress and decompress audio
-```bash
+```ruby
 python -m scripts.compress  --input /path/to/input.wav --save_path /path/to/output --model_path /path/to/model --num_streams 6 --device cpu 
 ```
 This will create `.pth` and `.wav` files (code and reconstructed audio) under `save_path`. Our codec supports `num_streams` from 1 to 6, corresponding to 1.5 ~ 9.0kbps bitrates. 
@@ -20,39 +20,25 @@ This will create `.pth` and `.wav` files (code and reconstructed audio) under `s
 ```python
 import torchaudio
 from models import ESC
-
-# use torchaudio loading
 model = ESC(**config)
 model.load_state_dict(
         torch.load("model.pth", map_location="cpu")["model_state_dict"],
     )
 model = model.to("cuda")
-
 x, _ = torchaudio.load("input.wav")
 x.to("cuda")
-
 # encode to codes
 codes, pshape = model.encode(x, num_streams=6)
 # decode to audios
 recon_x = model.decode(codes, pshape)
 ```
-This is the programmatic usage of esc to compress audio tensors. 
+This is the programmatic usage of esc to compress audio tensors using `torchaudio`. 
 
 ### Training
 
 We provide our developmental training and evaluation [dataset](https://huggingface.co/datasets/Tracygu/dnscustom/tree/main) on huggingface.
 ```ruby
-accelerate launch main.py \
-    --exp_name esc9kbps \
-    --config_path ./configs/9kbps_final.yaml
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 80 \
-    --num_pretraining_epochs 15 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --save_path /path/to/output \
-    --seed 53
+accelerate launch main.py --exp_name esc9kbps --config_path ./configs/9kbps_final.yaml --wandb_project efficient-speech-codec --lr 1.0e-4 --num_epochs 80 --num_pretraining_epochs 15 --num_devices 4 --dropout_rate 0.75 --save_path /path/to/output --seed 53
 ```
 We use `accelerate` library to handle distributed training. Logging is processed by `wandb` library. With 4 NVIDIA RTX4090 GPUs, training an ESC codec requires ~12h for 250k training steps on 180k 3-second audio clips with a batch size of 36. For detailed configurations, please refer to `./configs/` folder. 
 
