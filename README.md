@@ -41,7 +41,7 @@ This is the programmatic usage of esc to compress audio tensors.
 ### Training
 
 We provide our developmental training and evaluation [dataset](https://huggingface.co/datasets/Tracygu/dnscustom/tree/main) on huggingface.
-```bash
+```ruby
 accelerate launch main.py \
     --exp_name esc9kbps \
     --config_path ./configs/9kbps_final.yaml
@@ -58,7 +58,7 @@ We use `accelerate` library to handle distributed training. Logging is processed
 
 ### Evaluation
 
-```bash
+```ruby
 python -m scripts.test --eval_folder_path path/to/data --batch_size 12 --model_path /path/to/model --device cuda
 ```
 This will run codec evaluation at all bandwidth on a test set folder. We provide four metrics for reporting: `PESQ`, `Mel Distance`, `SI-SDR` and `Bitrate Utilization Rate`. The evaluation statistics will be saved into `model_path` by default.  
