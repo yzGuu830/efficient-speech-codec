@@ -1,9 +1,9 @@
 data:
-    data_dir: "/root/autodl-tmp/data"
-    in_freq: 192
-    win_len: 20
-    hop_len: 5
-    sr: 16000
+    train_data_path: ../data/train
+    val_data_path: ../data/val
+    num_workers: 36
+    train_bs_per_device: 9
+    val_bs_per_device: 4
 
 model:
     in_dim: 2
@@ -21,13 +21,12 @@ model:
     overlap: 2
     group_size: 3
     codebook_size: 1024
-    codebook_dims: [12,12,12,12,12,12]
+    codebook_dims: [32,32,16,12,8,6]
     l2norm: True
     init_method: kaiming
 
 loss:
-    recon_factor: 1.0
-    commitment_factor: .25
-    codebook_factor: 1.0
-    mel_factor: .25
-    reg_factor: 0.0
+    stft_weight: 1.0
+    cm_weight: .25
+    cb_weight: 1.0
+    mel_weight: .25

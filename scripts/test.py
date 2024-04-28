@@ -1,6 +1,6 @@
-from metrics import EntropyCounter, PESQ, MelSpectrogramDistance, SISDR
-from esc.models import make_model
-from esc.utils import read_yaml
+from scripts.metrics import EntropyCounter, PESQ, MelSpectrogramDistance, SISDR
+from models import make_model
+from utils import read_yaml
 
 from torch.utils.data import DataLoader, Dataset, default_collate
 from tqdm import tqdm
@@ -31,8 +31,9 @@ class EvalSet(Dataset):
         x, _ = torchaudio.load(self.testset_files[i])
         return x[0, :-80]
 
+@torch.no_grad()
 def eval_epoch(model, eval_loader:DataLoader, 
-               metric_funcs:dict, e_counter:EntropyCounter,
+               metric_funcs:dict, e_counter:EntropyCounter, device: str,
                num_streams=None, verbose: bool=True):
     model.eval()
 
@@ -44,9 +45,9 @@ def eval_epoch(model, eval_loader:DataLoader,
         perf = {k:[] for k in metric_funcs.keys()}
         e_counter.reset_stats(num_streams=s)
         for _, x in tqdm(enumerate(eval_loader), total=len(eval_loader), desc=f"Evaluating Codec at {s*1.5:.2f}kbps"):
-            x = x.to(model.device)
-            codes, size = model.encode(x, num_streams=s)
-            recon_x = model.decode(codes, size)
+            x = x.to(device)
+            outputs = model(**dict(x=x, x_feat=None, num_streams=s))
+            recon_x, codes = outputs["recon_audio"], outputs["codes"]
 
             for k, func in metric_funcs.items():    
                 perf[k].extend(func(x, recon_x).tolist())
@@ -55,6 +56,7 @@ def eval_epoch(model, eval_loader:DataLoader,
         for k, v in perf.items():
             all_perf[k].append(round(np.mean(v),4))
         rate, _ = e_counter.compute_utilization()
+        perf["utilization"] = [rate]
         all_perf["utilization"].append(rate)
 
         if verbose:
@@ -81,7 +83,7 @@ def run(args):
                                num_groups=model.quantizers[0].num_vqs, device=args.device)
 
     performances = eval_epoch(
-            model, eval_loader, metric_funcs, e_counter, 
+            model, eval_loader, metric_funcs, e_counter, args.device,
             num_streams=None, verbose=True # evaluate across all bitrates
         )
     
@@ -96,7 +98,13 @@ if __name__ == "__main__":
 
 
 """
-python scripts/test.py \
+python -m scripts.test \
+    --eval_folder_path ../evaluation_set/test \
+    --batch_size 12 \
+    --model_path ./esc9kbps \
+    --device cuda
+
+python -m scripts.test \
     --eval_folder_path /Users/tracy/Desktop/Checkpoints/ESC/evaluation_set/test \
     --batch_size 4 \
     --model_path /Users/tracy/Desktop/esc9kbps \

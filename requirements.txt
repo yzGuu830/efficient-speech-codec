@@ -1,0 +1,8 @@
+einops
+pesq
+timm
+transformers
+accelerate
+wandb
+torchaudio
+torch

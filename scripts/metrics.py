@@ -24,14 +24,14 @@ class EntropyCounter:
     def reset_stats(self, num_streams):
         self.codebook_counts = {
                 f"stream_{S}_group_{G+1}": torch.zeros(self.codebook_size, device=self.device) \
-                    for S in range(self.num_streams) for G in range(self.num_groups)
+                    for S in range(num_streams) for G in range(self.num_groups)
                 } # counts codeword stats for each codebook
         self.total_counts = 0
         self.dist = None    # posterior distribution for each codebook
         self.entropy = None # entropy stats for each codebook
 
         self.max_entropy_per_book = np.log2(self.codebook_size)
-        self.max_total_entropy = num_streams * self.max_entropy_per_book
+        self.max_total_entropy = num_streams * self.num_groups * self.max_entropy_per_book
         self.num_streams = num_streams
 
     def update(self, codes):
@@ -54,7 +54,7 @@ class EntropyCounter:
         """After iterating over a held-out set, compute posterior distribution for each codebook"""
         assert self.total_counts > 0, "No data collected, please update on a specific dataset"
         self.dist = {}
-        for k, _counts in self.total_counts.items():
+        for k, _counts in self.codebook_counts.items():
             self.dist[k] = _counts / torch.tensor(self.total_counts, device=_counts.device)
     
     def _form_entropy(self):
@@ -166,6 +166,6 @@ class SISDR(nn.Module):
 
         signal = (e_true**2).sum(dim=1)
         noise = (e_res**2).sum(dim=1)
-        sdr = -10 * torch.log10(signal / noise + eps)
+        sdr = 10 * torch.log10(signal/noise + eps)
 
-        return sdr.squeeze(1) # (B, L)
+        return sdr.squeeze(1) # (B,)
