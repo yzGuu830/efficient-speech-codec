@@ -1,8 +1,8 @@
 # ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
-This is the code repository for the Efficient Speech Codec presented in the paper [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing). Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining high quality. Here we provide a [model checkpoint](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and a [Demo Page]()
+This is the code repository for the Efficient Speech Codec presented in the paper [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing). Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining high quality. We provide [model checkpoint](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and [Demo Page]()
 
-[An illustration of ESC Architecture](assets/architecture.png)
+![An illustration of ESC Architecture](assets/architecture.png)
 
 ## Usage
 
@@ -22,7 +22,8 @@ python -m scripts.compress \
 ```
 This will create `.pth` and `.wav` files (codes and reconstructed audios) under `save_path`. Our codec supports `num_streams` from 1 to 6. 
 
-```{python}
+```python
+import torchaudio
 from models import ESC
 
 model = ESC(**config)
@@ -72,4 +73,4 @@ This will run codec evaluation at all bandwidth on a test set folder. We provide
 
 ## Results
 
-[Performance Evaluation](assets/results.png)
+![Performance Evaluation](assets/results.png)
