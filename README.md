@@ -1,52 +1,75 @@
 # ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
-This is the code repository for the Efficient Speech Codec presented in the paper [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing)
+This is the code repository for the Efficient Speech Codec presented in the paper [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://drive.google.com/file/d/1QqqgoAb5qB8GJcD_IWiUepMsfkoLEdYS/view?usp=sharing). Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining high quality. Here we provide a [model checkpoint](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and a [Demo Page]()
 
-![An illustration of ESC Architecture](assets/architecture.png)
+[An illustration of ESC Architecture](assets/architecture.png)
+
+## Usage
+
+### Install Dependencies
+```{python}
+pip install -r requirements.txt
+```
+
+### To compress and decompress audio
+```{python}
+python -m scripts.compress \
+    --input /path/to/input.wav \
+    --save_path /path/to/output \
+    --model_path /path/to/model \
+    --num_streams 6 \
+    --device cpu 
+```
+This will create `.pth` and `.wav` files (codes and reconstructed audios) under `save_path`. Our codec supports `num_streams` from 1 to 6. 
+
+```{python}
+from models import ESC
+
+model = ESC(**config)
+model.load_state_dict(
+        torch.load("model.pth", map_location="cpu")["model_state_dict"],
+    )
+model = model.to("cuda")
+
+x, _ = torchaudio.load("input.wav")
+x.to("cuda")
+
+# encode to codes
+codes, pshape = model.encode(x, num_streams=6)
+# decode to audios
+recon_x = model.decode(codes, pshape)
+```
+This is the programmatic usage of esc to compress tensor audios. 
 
 ### Training
 
-Use the following script to train a swin transformer-based cross-scale multiscale audio codec.
-
 ```{python}
-python src/main.py \
-    --config residual_18k.yml \
-    --seed 53 \
-    --wb_exp_name swin-18k-residual \
-    --wb_project_name Neural_Speech_Coding \
-    --num_epochs 80 \
+accelerate launch main.py \
+    --exp_name esc9kbps \
+    --config_path ./configs/9kbps_final.yaml
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
-    --train_bs_per_device 60 \
-    --test_bs_per_device 16 \
-    --num_device 4 \
-    --parallel dp \
-    --num_worker 4
+    --num_epochs 80 \
+    --num_pretraining_epochs 15 \
+    --num_devices 4 \
+    --dropout_rate 0.75 \
+    --save_path /path/to/output \
+    --seed 53
 ```
+We use `accelerate` library to handle distributed training. Logging is processed by `wandb` library. With 4 NVIDIA RTX4090 GPUs, training an ESC codec requires ~12h for 250k training steps on 180k 3-second audio clips with a batch size of 36.
 
-````{=html}
-<!-- ### Inference
-
-Use the following script to make a compression inference.
+### Evaluation
 
 ```{python}
-python eval/test_codec.py \
-        --model_path model_dir \
-        --device "cpu" \
-        --source test/instance1.wav \
-        --multiscale \
-        --kbps 18 \
-        --output_dir test
+python -m scripts.test \
+    --eval_folder_path path/to/data \
+    --batch_size 12 \
+    --model_path /path/to/model \
+    --device cuda
 ```
+This will run codec evaluation at all bandwidth on a test set folder. We provide four metrics for reporting: `PESQ`, `Mel Distance`, `SI-SDR` and `Bitrate Utilization Rate`. The evaluation statistics will be saved into `model_path` by default.  
 
-You can specify a fixed bitrate by removing ---multiscale and set ---kbps from [3, 6, 9, 12, 15, 18] -->
-````
 
-```{=html}
-<!-- ### Results
+## Results
 
-Our Codec performance evaluated over DNS-Challenge Dataset is plotted below. We compared our swin-based codec with Jiang et, al. (2022), who invented the cross-scale vector quantization schema that has inspired our work.
-
-![](assets/test_result_curve.jpg)
-
-You can also investigate a test instance of our codec [here](https://western-spatula-93a.notion.site/Swin-T-Cross-Scale-Audio-Codec-Evaluated-Instances-b9cf99937b794973a95344d834f594a8?pvs=4), where we provide multi-scale reconstructed audios, as well as spectrogram plots with metrics specified. -->
-```
+[Performance Evaluation](assets/results.png)
