@@ -1,0 +1,82 @@
+# Model setup
+DAC:
+  sample_rate: 16000
+  encoder_dim: 64
+  encoder_rates: [2, 4, 5, 8]
+  decoder_dim: 1536
+  decoder_rates: [8, 5, 4, 2]
+
+# Quantization
+  n_codebooks: 18
+  codebook_size: 1024
+  codebook_dim: 8
+  quantizer_dropout: 0.5
+
+# Discriminator
+Discriminator:
+  sample_rate: 16000
+  rates: []
+  periods: [2, 3, 5, 7, 11]
+  fft_sizes: [2048, 1024, 512]
+  bands:
+    - [0.0, 0.1]
+    - [0.1, 0.25]
+    - [0.25, 0.5]
+    - [0.5, 0.75]
+    - [0.75, 1.0]
+
+# Optimization
+AdamW:
+  betas: [0.8, 0.99]
+  lr: 0.0001
+ExponentialLR:
+  gamma: 0.999996
+
+amp: false
+val_batch_size: 24
+batch_size: 16
+device: cuda
+num_iters: 400000
+save_iters: [10000, 50000, 100000, 200000]
+valid_freq: 4000
+sample_freq: 10000
+num_workers: 32
+log_every: 5
+val_idx: [0, 1, 2, 3, 4, 5, 6, 7]
+seed: 53
+lambdas:
+  mel/loss: 15.0
+  adv/feat_loss: 2.0
+  adv/gen_loss: 1.0
+  vq/commitment_loss: 0.25
+  vq/codebook_loss: 1.0
+
+# Transforms
+build_transform:
+  preprocess:
+    - Identity
+  augment_prob: 0.0
+  augment:
+    - Identity
+  postprocess:
+    - VolumeNorm
+    - RescaleAudio
+    - ShiftPhase
+
+# Loss setup
+MultiScaleSTFTLoss:
+  window_lengths: [2048, 512]
+MelSpectrogramLoss:
+  n_mels: [5, 10, 20, 40, 80, 160, 320]
+  window_lengths: [32, 64, 128, 256, 512, 1024, 2048]
+  mel_fmin: [0, 0, 0, 0, 0, 0, 0]
+  mel_fmax: [null, null, null, null, null, null, null]
+  pow: 1.0
+  clamp_eps: 1.0e-5
+  mag_weight: 0.0
+
+
+data_path: ../DNS_CHALLENGE/processed_wav
+save_path: ../dac_output/DAC16kHz_9kbps_base/ 
+wb_project_name: Neural_Speech_Coding
+wb_exp_name: DAC16kHz_9kbps_base
