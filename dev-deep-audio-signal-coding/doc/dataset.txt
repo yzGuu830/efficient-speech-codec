@@ -1,5 +1,0 @@
-MicArray http://www.speech.cs.cmu.edu/databases/micarray/index.html
-CSR-IV HUB3 https://catalog.ldc.upenn.edu/LDC96S33
-Mixer 6 Speech https://catalog.ldc.upenn.edu/LDC2013S03
-DEMAND https://zenodo.org/record/1227121#.Xa-NoHak14U (https://www.kaggle.com/aanhari/demand-dataset)
-DIRHA English WSJ Audio https://catalog.ldc.upenn.edu/LDC2018S01
