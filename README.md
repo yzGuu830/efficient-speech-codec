@@ -2,7 +2,7 @@
 
 [arXiv] This is the code repository for the ESC presented in the [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://arxiv.org/abs/2404.19441) paper. 
 - Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining comparative reconstruction quality to Descript's audio codec. 
-- We provide [Model Checkpoints](https://drive.google.com/file/d/157L22yu-bt_ARrsXYYGnEd6w-8saeUdV/view?usp=sharing) and a [Demo Page](https://western-spatula-93a.notion.site/Efficient-Speech-Codec-0e513f33cf104f799e16bcad015b03ef?pvs=4)
+- We provide [Model Checkpoints](https://drive.google.com/drive/folders/1wXYWwTJECYUt8VpN6ZO3CdXO36JTwvlE?usp=sharing) and a [Demo Page](https://western-spatula-93a.notion.site/Efficient-Speech-Codec-0e513f33cf104f799e16bcad015b03ef?pvs=4)
 
 ![An illustration of ESC Architecture](assets/architecture.png)
 ## Usage
