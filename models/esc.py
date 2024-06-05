@@ -2,7 +2,7 @@ import torch, torchaudio, math
 import torch.nn as nn
 from einops import rearrange
 
-from modules import TransformerLayer, PatchEmbed, PatchDeEmbed, ProductVectorQuantize
+from modules import TransformerLayer, PatchEmbed, PatchDeEmbed, ProductVectorQuantize, ResidualVectorQuantize
 
 class BaseAudioCodec(nn.Module):
     def __init__(self, in_dim: int, in_freq: int, h_dims: list, max_streams: int,
@@ -40,7 +40,7 @@ class BaseAudioCodec(nn.Module):
         feat = torch.view_as_complex(rearrange(feat, "b c h w -> b h w c"))
         return self.ift(feat)
         
-    def init_quantizers(self, patch_size: tuple, overlap: int, group_size: int, codebook_dims: list, 
+    def init_product_vqs(self, patch_size: tuple, overlap: int, group_size: int, codebook_dims: list, 
                 codebook_size: int, l2norm: bool, init_method: str):
         
         freq_patch, time_patch = patch_size
@@ -75,6 +75,19 @@ class BaseAudioCodec(nn.Module):
         self.max_bps = (2/overlap)*self.max_streams * math.log2(codebook_size)*group_size // (20*time_patch//2)
         return quantizers
 
+    def init_residual_vqs(self, patch_size: tuple, overlap: int, num_residual_vqs: int, codebook_dim: int, 
+                codebook_size: int, l2norm: bool):
+
+        freq_patch, time_patch = patch_size
+        H = self.in_freq//freq_patch
+
+        quantizers = ResidualVectorQuantize(
+            in_dim=self.dec_h_dims[0], in_freq=H//2**(self.max_streams-1),
+            overlap=overlap, num_vqs=num_residual_vqs, codebook_dim=codebook_dim,
+            codebook_size=codebook_size, l2norm=l2norm
+        )
+        return quantizers
+
     def print_codec(self):
         freq_dims, hidden_dims, reshaped_dims, individual_dims, codebook_dims = [], [], [], [], []
         for pvq in self.quantizers:
@@ -101,11 +114,11 @@ class ESC(BaseAudioCodec):
                  l2norm: bool = True, init_method: str = "kmeans",) -> None:
         super().__init__(in_dim, in_freq, h_dims, max_streams, win_len, hop_len, sr)
 
-        self.quantizers = self.init_quantizers(
+        self.quantizers = self.init_product_vqs(
                     patch_size, overlap, group_size, codebook_dims, codebook_size, l2norm, init_method
                 )
-        self.encoder = Encoder(in_freq, in_dim, h_dims, tuple(patch_size), swin_heads, swin_depth, window_size, mlp_ratio)
-        self.decoder = Decoder(in_freq, in_dim, h_dims[::-1], tuple(patch_size), swin_heads[::-1], swin_depth, window_size, mlp_ratio)
+        self.encoder = SwinTEncoder(in_freq, in_dim, h_dims, tuple(patch_size), swin_heads, swin_depth, window_size, mlp_ratio)
+        self.decoder = CrossScaleSwinTDecoder(in_freq, in_dim, h_dims[::-1], tuple(patch_size), swin_heads[::-1], swin_depth, window_size, mlp_ratio)
 
     def forward_one_step(self, x, x_feat=None, num_streams=6, freeze_codebook=False):
         if x_feat is None:
@@ -158,7 +171,7 @@ class ESC(BaseAudioCodec):
         print()
         self.decoder.vis_decoder()
 
-class Encoder(nn.Module):
+class SwinTEncoder(nn.Module):
     def __init__(self, 
                  in_freq: int, 
                  in_dim: int, 
@@ -216,7 +229,7 @@ class Encoder(nn.Module):
                 i, blk.depth, blk.swint_blocks[0].d_model, blk.swint_blocks[0].num_heads, blk.subsample!=None
             ))
     
-class CrossScaleDecoder(nn.Module):
+class CrossScaleRVQ(nn.Module):
     def __init__(self, backbone="swinT") -> None:
         super().__init__()
         if backbone == "swinT": self.dims = 3
@@ -267,7 +280,7 @@ class CrossScaleDecoder(nn.Module):
         dec_refine = self.post_fuse(residual_q, dec)
         return dec_refine
     
-class Decoder(CrossScaleDecoder):
+class CrossScaleSwinTDecoder(CrossScaleRVQ):
     def __init__(self,                  
                  in_freq: int, 
                  in_dim: int, 
