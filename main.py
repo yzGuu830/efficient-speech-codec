@@ -14,6 +14,7 @@ def parse_args_config():
     parser.add_argument("--num_pretraining_epochs", default=10, type=int)
     parser.add_argument("--num_devices", default=4, type=int)
     parser.add_argument("--num_warmup_steps", default=0, type=int)
+    parser.add_argument("--val_metric", default="PESQ", type=str)
     parser.add_argument("--scheduler_type", default="constant", type=str)
     parser.add_argument("--dropout_rate", type=float, default=1.0)
     
@@ -35,7 +36,7 @@ if __name__ == "__main__":
 """
 accelerate launch main.py \
     --exp_name esc9kbps \
-    --config_path ./configs/9kbps_final.yaml
+    --config_path ./configs/9kbps_final.yaml \
     --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 80 \

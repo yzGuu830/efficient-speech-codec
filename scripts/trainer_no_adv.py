@@ -42,7 +42,7 @@ class Trainer:
                                    warmup_steps=self.args.num_warmup_steps)
         
         self.accel.print(f"<<<<Experimental Setup: {self.args.exp_name}>>>>")
-        self.accel.print(f"   BatchSize_per_Device: Train {self.config.data.train_bs_per_device} Test {self.config.data.test_bs_per_device}    LearningRate: {self.args.lr}")
+        self.accel.print(f"   BatchSize_per_Device: Train {self.config.data.train_bs_per_device} Test {self.config.data.val_bs_per_device}    LearningRate: {self.args.lr}")
         self.accel.print(f"   Total_Training_Steps: {self.args.train_steps}*{self.args.num_epochs}={self.args.max_train_steps}")
         self.accel.print(f"   Pre-Training_Steps: {self.args.train_steps}*{self.args.num_pretraining_epochs}={self.args.pretraining_steps}")
         self.accel.print(f"   Optimizer: AdamW    Scheduler: {self.args.scheduler_type}")
@@ -55,7 +55,7 @@ class Trainer:
         self.train_dl, self.val_dl = self.accel.prepare(train_dl), val_dl # No Distributing on Valset
         self.model, self.optimizerm, self.scheduler = self.accel.prepare(model, optimizer, scheduler) 
 
-        self.start_step, self.best_perf = 0, np.inf 
+        self.start_step, self.best_perf = 0, -1 
         self.pbar = tqdm(initial=self.start_step, total=self.args.max_train_steps, position=0, leave=True)
         while True:
             for _, x in enumerate(self.train_dl):
@@ -127,8 +127,8 @@ class Trainer:
                          " | ".join(f"{k}: {v:.4f}" for k, v in perf.items()))
 
         # Saving Checkpoints
-        if perf["MelDistance"] < self.best_perf: 
-            self.best_perf = perf["MelDistance"]
+        if perf[self.args.val_metric] > self.best_perf: 
+            self.best_perf = perf[self.args.val_metric]
             self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="best.pth")
         self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="checkpoint.pth")
 

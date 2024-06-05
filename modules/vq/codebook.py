@@ -78,7 +78,7 @@ class Codebook(nn.Module):
         
         if self.training and freeze:            # Freeze Update to Codebook         
             z_q_down = z_e_down + z_q_down * 0.                 
-            commitment_loss, codebook_loss = 0., 0.
+            commitment_loss, codebook_loss = torch.zeros(z_e.size(0), device=z_e.device), torch.zeros(z_e.size(0), device=z_e.device)
         elif self.training and (not freeze):    # Straight-Through Estimator
             commitment_loss = F.mse_loss(z_q_down.detach(), z_e_down, reduction="none").mean([1,2])
             codebook_loss = F.mse_loss(z_q_down, z_e_down.detach(), reduction="none").mean([1,2])
