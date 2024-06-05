@@ -217,8 +217,11 @@ class Encoder(nn.Module):
             ))
     
 class CrossScaleDecoder(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, backbone="swinT") -> None:
         super().__init__()
+        if backbone == "swinT": self.dims = 3
+        elif backbone == "conv": self.dims = 4
+        else: raise ValueError("Invalid backbone specification")
     
     def pre_fuse(self, enc, dec):
         """Compute residuals to quantize"""
@@ -260,7 +263,7 @@ class CrossScaleDecoder(nn.Module):
     
     def csrvq_decode(self, codes, dec, vq):
 
-        residual_q = vq.decode(codes)
+        residual_q = vq.decode(codes, self.dims)
         dec_refine = self.post_fuse(residual_q, dec)
         return dec_refine
     

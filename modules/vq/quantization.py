@@ -5,6 +5,9 @@ from einops import rearrange
 from modules.vq.codebook import Codebook
 from modules.vq.initialize import codebook_init_forward_hook_pvq
 
+class ResidualVectorQuantize(nn.Module):
+    "Residual VQ Layer"
+
 
 class ProductVectorQuantize(nn.Module):
     "Product VQ Layer"
@@ -39,10 +42,11 @@ class ProductVectorQuantize(nn.Module):
     def forward(self, z_e, freeze=False):
         """ Product VQ Forwrd Function.
         Args: 
-            z_e: Input vector, tensor with shape (B, H*W, C)
+            z_e: Input vector with shape (B, H*W, C) [swinT output] or (B, C, H, W) [conv output]
             freeze: boolean (True for handling pre-training stage, when codebook is not updated)
         """
-        z_e = self.pre_process(z_e)
+        dims = len(z_e.shape)
+        z_e = pre_process(z_e, self.in_freq, self.overlap, self.fix_dim, dims)
         z_q, z_e_downs, indices = [], [], []
         codebook_loss, commitment_loss = 0., 0.
         
@@ -61,40 +65,11 @@ class ProductVectorQuantize(nn.Module):
             codebook_loss += cb_loss
             s_idx = e_idx
 
-        z_q = self.post_process(torch.cat(z_q, dim=-1)) # [B, H*W, C]       
-        indices = torch.stack(indices, dim=1)           # [B, group_size, T]
-        z_e_downs = torch.stack(z_e_downs, dim=1)       # [B, group_size, T, codebook_dim] (used for kmeans)
+        z_q = post_process(torch.cat(z_q, dim=-1),
+                self.in_freq, self.overlap, self.fix_dim, dims) # [B, H*W, C] / [B, C, H, W]      
+        indices = torch.stack(indices, dim=1)                   # [B, group_size, T]
+        z_e_downs = torch.stack(z_e_downs, dim=1)               # [B, group_size, T, codebook_dim] (used for kmeans)
         return (z_q, z_e_downs, indices), (commitment_loss/self.num_vqs, codebook_loss/self.num_vqs)
-
-    def pre_process(self, z_e):
-        """ Pre-process input vector (reshaping and overlapping)
-        Args: 
-            z_e: Input vector with shape (B, H*W, C)
-            returns: Reshaped vector with shape (B, W//overlap, overlap*H*C)
-        """
-        z_e = rearrange(z_e, "b (h w) c -> b w (c h)", h=self.in_freq)
-        B, W = z_e.size(0), z_e.size(1)
-
-        # overlap feature frames
-        if self.overlap > 1:
-            assert W % self.overlap == 0, "Time dimension must be multiple of overlap"
-            z_e = z_e.view(B, W//self.overlap, self.overlap, self.fix_dim) \
-                .reshape(B, W//self.overlap, self.overlap*self.fix_dim)    
-        return z_e
-    
-    def post_process(self, z_q):
-        """ Post-process quantized vector
-        Args: 
-            z_q: Quantized vector with shape (B, W//overlap, overlap*H*C) 
-            returns: Recovered vector with shape (B, H*W, C)
-        """
-        # split overlapping frames
-        if self.overlap > 1:
-            z_q = z_q.view(z_q.size(0), -1, self.overlap, self.fix_dim) \
-                .reshape(z_q.size(0), -1, self.fix_dim)
-        
-        z_q = rearrange(z_q, "b w (c h) -> b (h w) c", h=self.in_freq)
-        return z_q
 
     def encode(self, z_e):
         """ Encode to codes
@@ -102,7 +77,7 @@ class ProductVectorQuantize(nn.Module):
             returns: indices of size (B, group_size, T)
         """
 
-        z_e = self.pre_process(z_e)
+        z_e = pre_process(z_e, self.in_freq, self.overlap, self.fix_dim, len(z_e.shape))
         s_idx, codes = 0, []
         for i, vq in enumerate(self.vqs):
             e_idx = s_idx + self.vq_dims[i]
@@ -113,10 +88,11 @@ class ProductVectorQuantize(nn.Module):
         codes = torch.stack(codes, dim=1)
         return codes
     
-    def decode(self, codes):
+    def decode(self, codes, dims=3):
         """ Decode from codes
         Args:
             codes: indices tensor of size (B, Group_size, T)
+            dims: 3 for swinT / 4 for conv
             returns: reconstructed vector
         """
         z_q = []
@@ -125,7 +101,8 @@ class ProductVectorQuantize(nn.Module):
             z_q_i = vq.decode(code)
             z_q.append(z_q_i)
 
-        z_q = self.post_process(torch.cat(z_q, dim=-1))
+        z_q = post_process(torch.cat(z_q, dim=-1),
+                self.in_freq, self.overlap, self.fix_dim, dims)
         return z_q
 
 def split_dimension(total_dim, num):
@@ -135,3 +112,48 @@ def split_dimension(total_dim, num):
         dims = [total_dim//num for _ in range(num-1)]
         dims += [total_dim - sum(dims)]
     return dims
+
+def pre_process(z_e, in_freq, overlap, fix_dim, dims=3):
+    """ Pre-process input vector (reshaping and overlapping)
+    Args: 
+        z_e: Input vector with shape (B, H*W, C) [swinT output] or (B, C, H, W) [conv output]
+        in_freq: H
+        overlap: Number of overlapped frames to quantize together
+        fix_dim: C*H
+        dims: 3 for swinT / 4 for conv
+        returns: Reshaped vector with shape (B, W//overlap, overlap*H*C)
+    """
+    if dims == 3:   # [swinT output]
+        z_e = rearrange(z_e, "b (h w) c -> b w (c h)", h=in_freq)
+    elif dims == 4: # [conv output]
+        z_e = rearrange(z_e, "b c h w -> b w (c h)")
+    
+    B, W = z_e.size(0), z_e.size(1)
+
+    # overlap feature frames
+    if overlap > 1:
+        assert W % overlap == 0, "Time dimension must be multiple of overlap"
+        z_e = z_e.view(B, W//overlap, overlap, fix_dim) \
+            .reshape(B, W//overlap, overlap*fix_dim)    
+    return z_e
+    
+def post_process(z_q, in_freq, overlap, fix_dim, dims=3):
+    """ Post-process quantized vector
+    Args: 
+        z_q: Quantized vector with shape (B, W//overlap, overlap*H*C)
+        in_freq: H
+        overlap: Number of overlapped frames to quantize together
+        fix_dim: C*H
+        dims: 3 for swinT / 4 for conv
+        returns: Recovered vector with shape (B, H*W, C) [swinT output] or (B, C, H, W) (conv output)
+    """
+    # split overlapping frames
+    if overlap > 1:
+        z_q = z_q.view(z_q.size(0), -1, overlap, fix_dim) \
+            .reshape(z_q.size(0), -1, fix_dim)
+    if dims == 3:   # [swinT output]
+        z_q = rearrange(z_q, "b w (c h) -> b (h w) c", h=in_freq)
+    elif dims == 4: # [conv output]
+        z_q = rearrange(z_q, "b w (c h) -> b c h w", h=in_freq)
+
+    return z_q
