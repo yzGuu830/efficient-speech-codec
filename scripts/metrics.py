@@ -12,8 +12,11 @@ SR = 16000
 class EntropyCounter:
     """Counter maintaining codebook utilization rate on a held-out validation set"""
     def __init__(self, codebook_size=1024, 
-                 num_streams=6, num_groups=3, 
+                 num_streams=6, num_groups=3, vq_type="csvq",
                  device="cuda"):
+
+        self.vq_type = vq_type
+        if vq_type == "rvq": num_groups = 1
 
         self.num_groups = num_groups
         self.codebook_size = codebook_size
@@ -37,8 +40,10 @@ class EntropyCounter:
     def update(self, codes):
         """ Update codebook counts and total counts from a batch of codes
         Args:
-            codes: (B, num_streams, group_size, *)
+            codes: (B, num_streams, group_size, *) for csvq
+                   (B, num_streams, *) for rvq
         """ 
+        if self.vq_type == "rvq": codes = codes.unsqueeze(2)
         assert codes.size(1) == self.num_streams and codes.size(2) == self.num_groups, "code indices size not match"
         num_codes = codes.size(0) * codes.size(-1)
         self.total_counts += num_codes

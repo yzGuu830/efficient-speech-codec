@@ -24,7 +24,7 @@ class Trainer:
         self.metrics = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(self.accel.device), "SISDR": SISDR().to(self.accel.device)}
         self.e_counter = EntropyCounter(self.config.model.codebook_size, 
                                    self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs, 
-                                   self.config.model.group_size if "csvq" in self.config.model_name else 1, device=self.accel.device)
+                                   vq_type=self.config.model_name.split("+")[0], device=self.accel.device)
         self.loss_funcs = {"mel_loss": make_losses(name="mel_loss").to(self.accel.device),
                            "stft_loss": make_losses(name="stft_loss").to(self.accel.device),}
         
@@ -75,16 +75,15 @@ class Trainer:
             for _, x in enumerate(self.train_dl):
                 self.train_step(x)
                 if self.accel.is_main_process:
-                    if self.pbar.n > self.args.pretraining_steps and (self.pbar.n+1) % self.args.train_steps==0:
+                    if self.pbar.n > self.args.pretraining_steps and self.pbar.n % self.args.train_steps==0:
                         self.evaluate()
                     if (self.pbar.n+1) % self.args.log_steps==0:
                         self.log_step()
+                    if self.pbar.n == self.args.pretraining_steps and self.pbar.n > 0:
+                        self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="pretrained.pth")
                 self.accel.wait_for_everyone()
 
-                if self.pbar.n == self.args.pretraining_steps and self.pbar.n > 0:
-                    if self.accel.is_main_process:
-                        self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="pretrained.pth")
-                    
+                if self.pbar.n == self.args.pretraining_steps + 1:
                     # start training involving vqs: initialization
                     if "csvq" in self.config.model_name: 
                         for pvq in self.accel.unwrap_model(self.model).quantizers:
@@ -93,7 +92,6 @@ class Trainer:
                     elif "rvq" in self.config.model_name:
                         for vq in self.accel.unwrap_model(self.model).quantizers.vqs:
                             torch.nn.init.kaiming_normal_(vq.embedding.weight) 	
-
                 self.accel.wait_for_everyone()
                 
                 self.pbar.update(1)
@@ -142,7 +140,8 @@ class Trainer:
         eval_streams = self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs
         perf = eval_epoch(model=self.accel.unwrap_model(self.model).to(self.accel.device), 
                           eval_loader=self.val_dl, metric_funcs=self.metrics, e_counter=self.e_counter,
-                          device=self.accel.device, num_streams=eval_streams, verbose=False)
+                          device=self.accel.device, bps_per_stream=self.bps_per_stream,
+                          num_streams=eval_streams, verbose=False)
 
         # wandb logging
         perf = {k:v[0] for k,v in perf.items()}
