@@ -5,26 +5,24 @@ data:
     train_bs_per_device: 9
     val_bs_per_device: 4
 
-model_name: csvq+swinT
+model_name: rvq+conv
 model:
     in_dim: 2
     in_freq: 192
-    h_dims: [45,72,96,144,192,384]
+    h_dims: [45,72,96,144,192,384] #[16,16,24,24,32,64]
     max_streams: 6
+    backbone: conv
+    kernel_size: [5,2]
+    conv_depth: 1
+    overlap: 4
+    num_rvqs: 18
+    group_size: 1
+    codebook_size: 1024
+    codebook_dim: 8
+    l2norm: True
     win_len: 20
     hop_len: 5
     sr: 16000
-    patch_size: [3,2]
-    swin_heads: [3,6,12,24,24]
-    swin_depth: 2
-    window_size: 4
-    mlp_ratio: 4.
-    overlap: 2
-    group_size: 3
-    codebook_size: 1024
-    codebook_dims: [32,32,16,12,8,6]
-    l2norm: True
-    init_method: kaiming
 
 loss:
     stft_weight: 1.0

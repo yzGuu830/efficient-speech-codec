@@ -17,11 +17,13 @@ class Trainer:
 
     def load(self):
         # Model
-        model = make_model(self.config.model)
+        model = make_model(self.config.model, self.config.model_name)
+        n_params = sum(p.numel() for p in model.parameters())
         
         # Metrics and Losses
         self.metrics = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(self.accel.device), "SISDR": SISDR().to(self.accel.device)}
-        self.e_counter = EntropyCounter(self.config.model.codebook_size, self.config.model.max_streams, 
+        self.e_counter = EntropyCounter(self.config.model.codebook_size, 
+                                   self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs, 
                                    self.config.model.group_size, device=self.accel.device)
         self.loss_funcs = {"mel_loss": make_losses(name="mel_loss").to(self.accel.device),
                            "stft_loss": make_losses(name="stft_loss").to(self.accel.device),}
@@ -47,6 +49,7 @@ class Trainer:
         self.accel.print(f"   Pre-Training_Steps: {self.args.train_steps}*{self.args.num_pretraining_epochs}={self.args.pretraining_steps}")
         self.accel.print(f"   Optimizer: AdamW    Scheduler: {self.args.scheduler_type}")
         self.accel.print(f"   Quantization_Dropout: {self.args.dropout_rate}")
+        self.accel.print(f"   Model #Parameters: {n_params/1000000:.2f}M")
 
         return model, optimizer, scheduler, train_dl, val_dl
     
@@ -81,7 +84,8 @@ class Trainer:
     def train_step(self, x):
         
         # VQ Dropout and Pre-Training
-        s = quantization_dropout(dropout_rate=self.args.dropout_rate, max_streams=self.config.model.max_streams)
+        s = quantization_dropout(dropout_rate=self.args.dropout_rate, 
+                max_streams=self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs)
         freeze_vq = self.pbar.n < self.args.pretraining_steps
         
         stage = "Pre-Training at 0kbps" if freeze_vq else f"Sampling at {s*1.5:.2f}kbps"
@@ -117,13 +121,16 @@ class Trainer:
     
     def evaluate(self, ):
         # Validation Epoch
+        eval_streams = self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs
+        bps_per_stream = 1.5 if "csvq" in self.config.model_name else 0.5
         perf = eval_epoch(model=self.accel.unwrap_model(self.model).to(self.accel.device), 
                           eval_loader=self.val_dl, metric_funcs=self.metrics, e_counter=self.e_counter,
-                          device=self.accel.device, num_streams=self.config.model.max_streams, verbose=False)
+                          device=self.accel.device, num_streams=eval_streams, verbose=False)
+
         # wandb logging
         perf = {k:v[0] for k,v in perf.items()}
         if wandb.run is not None: wandb.log(perf)
-        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {self.config.model.max_streams*1.5:.2f}kbps:\n", 
+        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {eval_streams*bps_per_stream:.2f}kbps:\n", 
                          " | ".join(f"{k}: {v:.4f}" for k, v in perf.items()))
 
         # Saving Checkpoints

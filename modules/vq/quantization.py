@@ -31,6 +31,10 @@ class ResidualVectorQuantize(nn.Module):
                 Codebook(codebook_dim, codebook_dim, codebook_size, l2norm) for _ in range(num_vqs)
                 # perform no projection in each codebook
             ])
+        
+        for i in range(num_vqs):
+            nn.init.kaiming_normal_(self.vqs[i].embedding.weight) 	
+        print("Initializing Residual VQs with KaimingNormal")
 
     def forward(self, z_e, num_streams, freeze=False):
         """ Residual VQ Forwrd Function.
@@ -43,6 +47,7 @@ class ResidualVectorQuantize(nn.Module):
 
         dims = len(z_e.shape)
         z_e = pre_process(z_e, self.in_freq, self.overlap, self.fix_dim, dims) # [B, W//overlap, overlap*H*C]
+
         z_e_down = self.proj_down(z_e) if self.do_proj else z_e
 
         # recursively quantize residuals
@@ -75,7 +80,7 @@ class ResidualVectorQuantize(nn.Module):
         z_q = post_process(z_q, self.in_freq, self.overlap, self.fix_dim, dims) # [B, H*W, C] / [B, C, H, W]
         indices = torch.stack(indices, dim=1)                                   # [B, rvq_size, T]
 
-        return (z_q, indices), (commitment_loss/self.num_vqs, codebook_loss/self.num_vqs)
+        return (z_q, indices), (commitment_loss, codebook_loss)
     
 
 class ProductVectorQuantize(nn.Module):
@@ -198,7 +203,6 @@ def pre_process(z_e, in_freq, overlap, fix_dim, dims=3):
         z_e = rearrange(z_e, "b c h w -> b w (c h)")
     
     B, W = z_e.size(0), z_e.size(1)
-
     # overlap feature frames
     if overlap > 1:
         assert W % overlap == 0, "Time dimension must be multiple of overlap"

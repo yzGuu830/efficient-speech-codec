@@ -37,7 +37,7 @@ class BaseAudioCodec(nn.Module):
             feat:    spectrum of shape [B, 2, H, W]
             returns: audio tensor of shape [B, L]
         """
-        feat = torch.view_as_complex(rearrange(feat, "b c h w -> b h w c"))
+        feat = torch.view_as_complex(rearrange(feat, "b c h w -> b h w c").contiguous())
         return self.ift(feat)
         
     def init_product_vqs(self, patch_size: tuple, overlap: int, group_size: int, codebook_dims: list, 
@@ -76,10 +76,12 @@ class BaseAudioCodec(nn.Module):
         return quantizers
 
     def init_residual_vqs(self, patch_size: tuple, overlap: int, num_residual_vqs: int, codebook_dim: int, 
-                codebook_size: int, l2norm: bool):
-
-        freq_patch, time_patch = patch_size
-        H = self.in_freq//freq_patch
+                codebook_size: int, l2norm: bool, backbone: str):
+        if backbone == "swinT":
+            freq_patch, time_patch = patch_size
+            H = self.in_freq//freq_patch
+        elif backbone == "conv":
+            H = self.in_freq 
 
         quantizers = ResidualVectorQuantize(
             in_dim=self.dec_h_dims[0], in_freq=H//2**(self.max_streams-1),
@@ -425,10 +427,3 @@ class CrossScaleSwinTDecoder(CrossScaleRVQ):
         print("Post-swin Layer: swin_depth={} swin_hidden={} heads={} up={}".format(
                 blk.depth, blk.swint_blocks[0].d_model, blk.swint_blocks[0].num_heads, blk.subsample!=None
             ))
-
-def make_model(model_config):
-    if isinstance(model_config, dict):
-        model = ESC(**model_config)
-    else:
-        model = ESC(**vars(model_config))
-    return model
