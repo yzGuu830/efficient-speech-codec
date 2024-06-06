@@ -23,6 +23,8 @@ class EvalSet(Dataset):
     def __init__(self, eval_folder_path) -> None:
         super().__init__()
         self.testset_files = glob.glob(f"{eval_folder_path}/*.wav")
+        if not self.testset_files:
+            self.testset_files = glob.glob(f"{eval_folder_path}/*/*.wav")
         
     def __len__(self):
         return len(self.testset_files)

@@ -24,7 +24,7 @@ class Trainer:
         self.metrics = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(self.accel.device), "SISDR": SISDR().to(self.accel.device)}
         self.e_counter = EntropyCounter(self.config.model.codebook_size, 
                                    self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs, 
-                                   self.config.model.group_size, device=self.accel.device)
+                                   self.config.model.group_size if "csvq" in self.config.model_name else 1, device=self.accel.device)
         self.loss_funcs = {"mel_loss": make_losses(name="mel_loss").to(self.accel.device),
                            "stft_loss": make_losses(name="stft_loss").to(self.accel.device),}
         
@@ -56,7 +56,7 @@ class Trainer:
     def train(self, ):
         model, optimizer, scheduler, train_dl, val_dl = self.load()
         self.train_dl, self.val_dl = self.accel.prepare(train_dl), val_dl # No Distributing on Valset
-        self.model, self.optimizerm, self.scheduler = self.accel.prepare(model, optimizer, scheduler) 
+        self.model, self.optimizer, self.scheduler = self.accel.prepare(model, optimizer, scheduler) 
 
         self.start_step, self.best_perf = 0, -1 
         self.pbar = tqdm(initial=self.start_step, total=self.args.max_train_steps, position=0, leave=True)
@@ -94,7 +94,7 @@ class Trainer:
         # Forward Pass
         outputs = self.model(**dict(x=x, x_feat=None, num_streams=s, freeze_codebook=freeze_vq))
         outputs["mel_loss"] = self.loss_funcs["mel_loss"](outputs["raw_audio"], outputs["recon_audio"])
-        outputs["stft_loss"] = self.loss_funcs["stft_loss"](outputs["raw_audio"], outputs["recon_audio"])
+        outputs["stft_loss"] = self.loss_funcs["stft_loss"](outputs["raw_feat"], outputs["recon_feat"])
         outputs["loss"] = outputs["cm_loss"]*self.config.loss.cm_weight + \
                           outputs["cb_loss"]*self.config.loss.cb_weight + \
                           outputs["mel_loss"]*self.config.loss.mel_weight + \
