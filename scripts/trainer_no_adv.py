@@ -73,17 +73,8 @@ class Trainer:
         self.pbar = tqdm(initial=self.start_step, total=self.args.max_train_steps, position=0, leave=True)
         while True:
             for _, x in enumerate(self.train_dl):
-                self.train_step(x)
-                if self.accel.is_main_process:
-                    if self.pbar.n > self.args.pretraining_steps and self.pbar.n % self.args.train_steps==0:
-                        self.evaluate()
-                    if (self.pbar.n+1) % self.args.log_steps==0:
-                        self.log_step()
-                    if self.pbar.n == self.args.pretraining_steps and self.pbar.n > 0:
-                        self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="pretrained.pth")
-                self.accel.wait_for_everyone()
 
-                if self.pbar.n == self.args.pretraining_steps + 1:
+                if self.pbar.n == self.args.pretraining_steps+1:
                     # start training involving vqs: initialization
                     if "csvq" in self.config.model_name: 
                         for pvq in self.accel.unwrap_model(self.model).quantizers:
@@ -91,9 +82,20 @@ class Trainer:
                             pvq.codebook_initialized.fill_(0)
                     elif "rvq" in self.config.model_name:
                         for vq in self.accel.unwrap_model(self.model).quantizers.vqs:
-                            torch.nn.init.kaiming_normal_(vq.embedding.weight) 	
-                self.accel.wait_for_everyone()
+                            torch.nn.init.kaiming_normal_(vq.embedding.weight) 
+
+                self.train_step(x)
                 
+                if self.accel.is_main_process:
+                    if self.pbar.n > self.args.pretraining_steps and self.pbar.n % self.args.train_steps==0:
+                        self.evaluate()
+                        self.model.train()
+                    if (self.pbar.n+1) % self.args.log_steps==0:
+                        self.log_step()
+                    if self.pbar.n == self.args.pretraining_steps and self.pbar.n > 0:
+                        self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="pretrained.pth")
+                self.accel.wait_for_everyone()
+                	
                 self.pbar.update(1)
                 if self.pbar.n == self.args.max_train_steps: return 
 
@@ -146,7 +148,7 @@ class Trainer:
         # wandb logging
         perf = {k:v[0] for k,v in perf.items()}
         if wandb.run is not None: wandb.log(perf)
-        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {eval_streams*self.bps_per_stream:.2f}kbps:\n", 
+        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {eval_streams*self.bps_per_stream:.2f}kbps: ", 
                          " | ".join(f"{k}: {v:.4f}" for k, v in perf.items()))
 
         # Saving Checkpoints
