@@ -2,8 +2,8 @@ data:
     train_data_path: ../data/train
     val_data_path: ../data/val
     num_workers: 36
-    train_bs_per_device: 9
-    val_bs_per_device: 4
+    train_bs_per_device: 18
+    val_bs_per_device: 6
 
 model_name: rvq+swinT
 model:

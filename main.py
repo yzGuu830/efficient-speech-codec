@@ -17,6 +17,7 @@ def parse_args_config():
     parser.add_argument("--val_metric", default="PESQ", type=str)
     parser.add_argument("--scheduler_type", default="constant", type=str)
     parser.add_argument("--dropout_rate", type=float, default=1.0)
+    parser.add_argument("--pretrain_ckp", type=str, default=None)
     
     parser.add_argument("--log_steps", default=5, type=int)
     parser.add_argument("--save_path", default="./output", type=str)
@@ -49,29 +50,41 @@ accelerate launch main.py \
 
 # RVQ + CNN 
 accelerate launch main.py \
-    --exp_name esc9kbps \
+    --exp_name rvq_conv_9kbps \
     --config_path ./configs/ablations/9kbps_rvq_conv.yaml \
     --wandb_project ESC-EMNLP-2025 \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
-    --num_devices 4 \
+    --num_devices 2 \
     --dropout_rate 0.75 \
     --save_path ../output \
     --seed 53
 
-
 # RVQ + SwinT 
 accelerate launch main.py \
-    --exp_name esc9kbps \
+    --exp_name rvq_swinT_9kbps \
     --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
     --wandb_project ESC-EMNLP-2025 \
     --lr 1.0e-4 \
-    --num_epochs 80 \
-    --num_pretraining_epochs 15 \
-    --num_devices 4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 10 \
+    --num_devices 2 \
     --dropout_rate 0.75 \
     --save_path ../output \
+    --seed 53
+
+accelerate launch main.py \
+    --exp_name rvq_swinT_9kbps \
+    --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
+    --wandb_project ESC-EMNLP-2025 \
+    --lr 1.0e-4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 10 \
+    --num_devices 2 \
+    --dropout_rate 0.75 \
+    --save_path ../output \
+    --pretrain_ckp ../output/rvq_swinT_9kbps/pretrained.pth \
     --seed 53
 
 """

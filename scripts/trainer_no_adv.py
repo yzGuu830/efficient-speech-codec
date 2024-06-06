@@ -51,14 +51,25 @@ class Trainer:
         self.accel.print(f"   Quantization_Dropout: {self.args.dropout_rate}")
         self.accel.print(f"   Model #Parameters: {n_params/1000000:.2f}M")
 
+        self.bps_per_stream = 1.5 if "csvq" in self.config.model_name else 0.5
+
         return model, optimizer, scheduler, train_dl, val_dl
     
     def train(self, ):
         model, optimizer, scheduler, train_dl, val_dl = self.load()
         self.train_dl, self.val_dl = self.accel.prepare(train_dl), val_dl # No Distributing on Valset
+        
+        if self.args.pretrain_ckp is not None:
+            ckp = torch.load(self.args.pretrain_ckp,)
+            model.load_state_dict(ckp["model_state_dict"])
+            optimizer.load_state_dict(ckp["optimizer_state_dict"])
+            scheduler.load_state_dict(ckp["scheduler_state_dict"])
+            self.start_step, self.best_perf = ckp["step"]+1, ckp['best_perf'] 
+            self.accel.print(f"Load Pretrained Encoder-Decoder Checkpoints\nPrevious Best Performance: {self.best_perf} Starting Step: {self.start_step}")
+        else:
+            self.start_step, self.best_perf = 0, -1 
+        
         self.model, self.optimizer, self.scheduler = self.accel.prepare(model, optimizer, scheduler) 
-
-        self.start_step, self.best_perf = 0, -1 
         self.pbar = tqdm(initial=self.start_step, total=self.args.max_train_steps, position=0, leave=True)
         while True:
             for _, x in enumerate(self.train_dl):
@@ -73,9 +84,16 @@ class Trainer:
                 if self.pbar.n == self.args.pretraining_steps and self.pbar.n > 0:
                     if self.accel.is_main_process:
                         self.save_ckp(save_pth=f"{self.args.save_path}/{self.args.exp_name}",tag="pretrained.pth")
-                    for pvq in self.model.quantizers:
-                        pvq.verbose_init = self.accel.is_main_process
-                        pvq.codebook_initialized.fill_(0)
+                    
+                    # start training involving vqs: initialization
+                    if "csvq" in self.config.model_name: 
+                        for pvq in self.accel.unwrap_model(self.model).quantizers:
+                            pvq.verbose_init = self.accel.is_main_process
+                            pvq.codebook_initialized.fill_(0)
+                    elif "rvq" in self.config.model_name:
+                        for vq in self.accel.unwrap_model(self.model).quantizers.vqs:
+                            torch.nn.init.kaiming_normal_(vq.embedding.weight) 	
+
                 self.accel.wait_for_everyone()
                 
                 self.pbar.update(1)
@@ -88,7 +106,7 @@ class Trainer:
                 max_streams=self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs)
         freeze_vq = self.pbar.n < self.args.pretraining_steps
         
-        stage = "Pre-Training at 0kbps" if freeze_vq else f"Sampling at {s*1.5:.2f}kbps"
+        stage = "Pre-Training at 0kbps" if freeze_vq else f"Sampling at {s*self.bps_per_stream:.2f}kbps"
         self.pbar.set_description(f"Training Model [{stage}]")
 
         # Forward Pass
@@ -122,7 +140,6 @@ class Trainer:
     def evaluate(self, ):
         # Validation Epoch
         eval_streams = self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs
-        bps_per_stream = 1.5 if "csvq" in self.config.model_name else 0.5
         perf = eval_epoch(model=self.accel.unwrap_model(self.model).to(self.accel.device), 
                           eval_loader=self.val_dl, metric_funcs=self.metrics, e_counter=self.e_counter,
                           device=self.accel.device, num_streams=eval_streams, verbose=False)
@@ -130,7 +147,7 @@ class Trainer:
         # wandb logging
         perf = {k:v[0] for k,v in perf.items()}
         if wandb.run is not None: wandb.log(perf)
-        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {eval_streams*bps_per_stream:.2f}kbps:\n", 
+        self.accel.print(f"[Step {self.pbar.n+1}/{self.args.max_train_steps}] | Performance at {eval_streams*self.bps_per_stream:.2f}kbps:\n", 
                          " | ".join(f"{k}: {v:.4f}" for k, v in perf.items()))
 
         # Saving Checkpoints
