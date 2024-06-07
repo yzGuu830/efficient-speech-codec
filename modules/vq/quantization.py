@@ -24,7 +24,7 @@ class ProductResidualVectorQuantize(nn.Module):
         
         self.fix_dim = in_freq*in_dim # dimension after reshaping
         self.vq_dims = split_dimension(self.fix_dim*overlap, num_pvqs)
-        print("vq dims: ", self.vq_dims, " mapping to: ", codebook_dim)
+
         self.vqs = nn.ModuleList([ 
                 # Codebook(in_dim, codebook_dim, codebook_size, l2norm) for in_dim in self.vq_dims,
                 ResidualVectorQuantize(hidden_dim=dim, num_vqs=num_rvqs, codebook_dim=codebook_dim, 
@@ -103,7 +103,7 @@ class ResidualVectorQuantize(nn.Module):
         
         for i in range(num_vqs):
             nn.init.kaiming_normal_(self.vqs[i].embedding.weight) 	
-        print("Initializing Residual VQs with KaimingNormal")
+        # print("Initializing Residual VQs with KaimingNormal")
     
     def residual_vector_quantize(self, z_e, num_streams):
         """ Recursively Quantize Vector Residuals

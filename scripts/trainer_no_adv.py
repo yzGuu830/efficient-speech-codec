@@ -22,8 +22,7 @@ class Trainer:
         
         # Metrics and Losses
         self.metrics = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(self.accel.device), "SISDR": SISDR().to(self.accel.device)}
-        self.e_counter = EntropyCounter(self.config.model.codebook_size, self.config.model.max_streams, 
-                                   vq_type=self.config.model_name.split("+")[0], device=self.accel.device)
+        self.e_counter = EntropyCounter(self.config.model.codebook_size, self.config.model.max_streams, device=self.accel.device)
         self.loss_funcs = {"mel_loss": make_losses(name="mel_loss").to(self.accel.device),
                            "stft_loss": make_losses(name="stft_loss").to(self.accel.device),}
         
@@ -79,12 +78,16 @@ class Trainer:
                         for pvq in self.accel.unwrap_model(self.model).quantizers:
                             pvq.verbose_init = self.accel.is_main_process
                             pvq.codebook_initialized.fill_(0)
-                        self.accel.print("Initializing PVQ codebooks")
+                        self.accel.print("Pretraining Done. Initializing PVQ codebooks")
                     elif "rvq" in self.config.model_name:
                         for rvq in self.accel.unwrap_model(self.model).quantizers.vqs:
-                            for vq in rvq:
+                            for vq in rvq.vqs:
                                 torch.nn.init.kaiming_normal_(vq.embedding.weight) 
-                        self.accel.print("Initializing RVQ codebooks")
+                        self.accel.print("Pretraining Done. Initializing RVQ codebooks")
+                    # renew optimizer
+                    optimizer = make_optimizer(self.accel.unwrap_model(self.model).parameters(), self.args.lr)
+                    self.optimizer = self.accel.prepare(optimizer)
+                    self.accel.print("Optimizer Renewed")
 
                 self.train_step(x)
                 

@@ -36,7 +36,7 @@ class EvalSet(Dataset):
 
 @torch.no_grad()
 def eval_epoch(model, eval_loader:DataLoader, 
-               metric_funcs:dict, e_counter:EntropyCounter, device: str,
+               metric_funcs:dict, e_counter:EntropyCounter, device: str, bps_per_stream: float,
                num_streams=None, verbose: bool=True):
     model.eval()
 
@@ -47,7 +47,7 @@ def eval_epoch(model, eval_loader:DataLoader,
     for s in eval_range: 
         perf = {k:[] for k in metric_funcs.keys()}
         e_counter.reset_stats(num_streams=s)
-        for _, x in tqdm(enumerate(eval_loader), total=len(eval_loader), desc=f"Evaluating Codec at {s*1.5:.2f}kbps"):
+        for _, x in tqdm(enumerate(eval_loader), total=len(eval_loader), desc=f"Evaluating Codec at {s*bps_per_stream:.2f}kbps"):
             x = x.to(device)
             outputs = model(**dict(x=x, x_feat=None, num_streams=s))
             recon_x, codes = outputs["recon_audio"], outputs["codes"]
