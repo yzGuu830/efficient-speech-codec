@@ -22,8 +22,7 @@ class Trainer:
         
         # Metrics and Losses
         self.metrics = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(self.accel.device), "SISDR": SISDR().to(self.accel.device)}
-        self.e_counter = EntropyCounter(self.config.model.codebook_size, 
-                                   self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs, 
+        self.e_counter = EntropyCounter(self.config.model.codebook_size, self.config.model.max_streams, 
                                    vq_type=self.config.model_name.split("+")[0], device=self.accel.device)
         self.loss_funcs = {"mel_loss": make_losses(name="mel_loss").to(self.accel.device),
                            "stft_loss": make_losses(name="stft_loss").to(self.accel.device),}
@@ -51,7 +50,7 @@ class Trainer:
         self.accel.print(f"   Quantization_Dropout: {self.args.dropout_rate}")
         self.accel.print(f"   Model #Parameters: {n_params/1000000:.2f}M")
 
-        self.bps_per_stream = 1.5 if "csvq" in self.config.model_name else 0.5
+        self.bps_per_stream = 1.5
 
         return model, optimizer, scheduler, train_dl, val_dl
     
@@ -80,9 +79,12 @@ class Trainer:
                         for pvq in self.accel.unwrap_model(self.model).quantizers:
                             pvq.verbose_init = self.accel.is_main_process
                             pvq.codebook_initialized.fill_(0)
+                        self.accel.print("Initializing PVQ codebooks")
                     elif "rvq" in self.config.model_name:
-                        for vq in self.accel.unwrap_model(self.model).quantizers.vqs:
-                            torch.nn.init.kaiming_normal_(vq.embedding.weight) 
+                        for rvq in self.accel.unwrap_model(self.model).quantizers.vqs:
+                            for vq in rvq:
+                                torch.nn.init.kaiming_normal_(vq.embedding.weight) 
+                        self.accel.print("Initializing RVQ codebooks")
 
                 self.train_step(x)
                 
@@ -102,8 +104,7 @@ class Trainer:
     def train_step(self, x):
         
         # VQ Dropout and Pre-Training
-        s = quantization_dropout(dropout_rate=self.args.dropout_rate, 
-                max_streams=self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs)
+        s = quantization_dropout(dropout_rate=self.args.dropout_rate, max_streams=self.config.model.max_streams)
         freeze_vq = self.pbar.n < self.args.pretraining_steps
         
         stage = "Pre-Training at 0kbps" if freeze_vq else f"Sampling at {s*self.bps_per_stream:.2f}kbps"
@@ -139,7 +140,7 @@ class Trainer:
     
     def evaluate(self, ):
         # Validation Epoch
-        eval_streams = self.config.model.max_streams if "csvq" in self.config.model_name else self.config.model.num_rvqs
+        eval_streams = self.config.model.max_streams
         perf = eval_epoch(model=self.accel.unwrap_model(self.model).to(self.accel.device), 
                           eval_loader=self.val_dl, metric_funcs=self.metrics, e_counter=self.e_counter,
                           device=self.accel.device, bps_per_stream=self.bps_per_stream,

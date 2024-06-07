@@ -24,7 +24,8 @@ class RVQCodecs(BaseAudioCodec):
                 window_size: int=4, 
                 mlp_ratio: float=4.,
                 overlap: int=4,
-                num_rvqs: int=18,
+                num_rvqs: int=6,
+                group_size: int=3,
                 codebook_dim: int=8,
                 codebook_size: int=1024,
                 l2norm: bool=True,
@@ -33,7 +34,7 @@ class RVQCodecs(BaseAudioCodec):
                 sr: int = 16000) -> None:
         super().__init__(in_dim, in_freq, h_dims, max_streams, win_len, hop_len, sr)
 
-        self.quantizers = self.init_residual_vqs(patch_size, overlap, num_rvqs, codebook_dim, codebook_size, l2norm, backbone)
+        self.quantizers = self.init_residual_vqs(patch_size, overlap, group_size, num_rvqs, codebook_dim, codebook_size, l2norm, backbone)
 
         if backbone=="swinT":
             self.encoder = SwinTEncoder(in_freq, in_dim, h_dims, patch_size, swin_heads, swin_depth, window_size, mlp_ratio)
@@ -44,8 +45,7 @@ class RVQCodecs(BaseAudioCodec):
         else:
             raise ValueError("backbone argument should be either `swinT` or `conv`")
 
-
-    def forward_one_step(self, x, x_feat=None, num_streams=18, freeze_codebook=False):
+    def forward_one_step(self, x, x_feat=None, num_streams=6, freeze_codebook=False):
         if x_feat is None:
             x_feat = self.spec_transform(x)
         else:

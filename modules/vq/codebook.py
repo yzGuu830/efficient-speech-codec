@@ -88,7 +88,9 @@ class Codebook(nn.Module):
             codebook_loss = commitment_loss
                         
         z_q = self.proj_up(z_q_down) if self.do_proj else z_q_down
-        return (z_q, z_e_down, code), (commitment_loss, codebook_loss)
+        
+        return {"z_q": z_q, "z_e_down": z_e_down, "code": code, 
+                "commitment_loss":commitment_loss, "codebook_loss": codebook_loss}
     
 
     def encode(self, z_e):

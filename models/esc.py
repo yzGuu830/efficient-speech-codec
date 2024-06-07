@@ -2,7 +2,7 @@ import torch, torchaudio, math
 import torch.nn as nn
 from einops import rearrange
 
-from modules import TransformerLayer, PatchEmbed, PatchDeEmbed, ProductVectorQuantize, ResidualVectorQuantize
+from modules import TransformerLayer, PatchEmbed, PatchDeEmbed, ProductVectorQuantize, ProductResidualVectorQuantize
 
 class BaseAudioCodec(nn.Module):
     def __init__(self, in_dim: int, in_freq: int, h_dims: list, max_streams: int,
@@ -75,18 +75,18 @@ class BaseAudioCodec(nn.Module):
         self.max_bps = (2/overlap)*self.max_streams * math.log2(codebook_size)*group_size // (20*time_patch//2)
         return quantizers
 
-    def init_residual_vqs(self, patch_size: tuple, overlap: int, num_residual_vqs: int, codebook_dim: int, 
-                codebook_size: int, l2norm: bool, backbone: str):
+    def init_residual_vqs(self, patch_size: tuple, overlap: int, num_product_vqs: int, num_residual_vqs: int, 
+                codebook_dim: int, codebook_size: int, l2norm: bool, backbone: str):
         if backbone == "swinT":
             freq_patch, time_patch = patch_size
             H = self.in_freq//freq_patch
         elif backbone == "conv":
             H = self.in_freq 
 
-        quantizers = ResidualVectorQuantize(
+        quantizers = ProductResidualVectorQuantize(
             in_dim=self.dec_h_dims[0], in_freq=H//2**(self.max_streams-1),
-            overlap=overlap, num_vqs=num_residual_vqs, codebook_dim=codebook_dim,
-            codebook_size=codebook_size, l2norm=l2norm
+            overlap=overlap, num_pvqs=num_product_vqs, num_rvqs=num_residual_vqs, 
+            codebook_dim=codebook_dim, codebook_size=codebook_size, l2norm=l2norm
         )
         return quantizers
 
