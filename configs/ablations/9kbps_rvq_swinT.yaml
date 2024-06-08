@@ -1,6 +1,6 @@
 data:
-    train_data_path: ../data/train
-    val_data_path: ../data/val
+    train_data_path: ../../../data/dnscustom/processed_wav/train
+    val_data_path: ../../../data/dnscustom/processed_wav/test
     num_workers: 36
     train_bs_per_device: 18
     val_bs_per_device: 6
@@ -18,8 +18,8 @@ model:
     window_size: 4
     mlp_ratio: 4.
     overlap: 2
-    num_rvqs: 18
-    group_size: 1
+    num_rvqs: 6
+    group_size: 3
     codebook_size: 1024
     codebook_dim: 8
     l2norm: True
