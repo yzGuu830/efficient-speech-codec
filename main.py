@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
 
 """
-# CSVQ + SwinT (ESC)
+# ESC Final
 accelerate launch main.py \
     --exp_name esc9kbps \
     --config_path ./configs/9kbps_final.yaml \
@@ -44,6 +44,33 @@ accelerate launch main.py \
     --num_epochs 80 \
     --num_pretraining_epochs 15 \
     --num_devices 4 \
+    --dropout_rate 0.75 \
+    --save_path ../output \
+    --seed 53
+
+
+# CSVQ + SwinT
+accelerate launch main.py \
+    --exp_name csvq_swinT_9kbps \
+    --config_path ./configs/9kbps_csvq_swinT.yaml \
+    --wandb_project ESC-EMNLP-2025 \
+    --lr 1.0e-4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 5 \
+    --num_devices 2 \
+    --dropout_rate 0.75 \
+    --save_path ../output \
+    --seed 53
+
+# CSVQ + CNN 
+accelerate launch main.py \
+    --exp_name csvq_conv_9kbps \
+    --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
+    --wandb_project ESC-EMNLP-2025 \
+    --lr 1.0e-4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 5 \
+    --num_devices 2 \
     --dropout_rate 0.75 \
     --save_path ../output \
     --seed 53
@@ -74,17 +101,17 @@ accelerate launch main.py \
     --save_path ../output \
     --seed 53
 
-accelerate launch main.py \
-    --exp_name rvq_swinT_9kbps \
-    --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
-    --wandb_project ESC-EMNLP-2025 \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 10 \
-    --num_devices 2 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --pretrain_ckp ../output/rvq_swinT_9kbps/pretrained.pth \
-    --seed 53
+# accelerate launch main.py \
+#     --exp_name rvq_swinT_9kbps \
+#     --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
+#     --wandb_project ESC-EMNLP-2025 \
+#     --lr 1.0e-4 \
+#     --num_epochs 50 \
+#     --num_pretraining_epochs 10 \
+#     --num_devices 2 \
+#     --dropout_rate 0.75 \
+#     --save_path ../output \
+#     --pretrain_ckp ../output/rvq_swinT_9kbps/pretrained.pth \
+#     --seed 53
 
 """
