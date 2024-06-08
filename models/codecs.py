@@ -88,12 +88,64 @@ class CSVQConvCodec(BaseAudioCodec):
     Frequency Codec with conv backbones along with CSVQ
     Experiment: CSVQ + CNN 
     """
-    def __init__(self, in_dim: int, in_freq: int, h_dims: list, max_streams: int, win_len: int = 20, hop_len: int = 5, sr: int = 16000) -> None:
+    def __init__(self, 
+                 in_dim: int, 
+                 in_freq: int, 
+                 h_dims: list, 
+                 max_streams: int, 
+                 kernel_size: list=[5,2],
+                 conv_depth: int=1,
+                 overlap: int=4,
+                 group_size: int=3,
+                 codebook_dim: int=8,
+                 codebook_size: int=1024,
+                 l2norm: bool=True,
+                 init_method: str="kmeans",
+                 win_len: int = 20, 
+                 hop_len: int = 5, 
+                 sr: int = 16000) -> None:
         super().__init__(in_dim, in_freq, h_dims, max_streams, win_len, hop_len, sr)
 
-        self.quantizers = self.init_product_vqs()
-        self.encoder = ConvEncoder
-        self.decoder = CrossScaleConvDecoder
+        self.quantizers = self.init_product_vqs(
+                    patch_size=(1,1), overlap=overlap, group_size=group_size, 
+                    codebook_dims=[codebook_dim]*max_streams, codebook_size=codebook_size, 
+                    l2norm=l2norm, init_method=init_method,
+                )
+        self.encoder = ConvEncoder(in_dim, h_dims, tuple(kernel_size), conv_depth)
+        self.decoder = CrossScaleConvDecoder(in_dim, h_dims[::-1], tuple(kernel_size), conv_depth)
+
+
+    def forward_one_step(self, x, x_feat=None, num_streams=6, freeze_codebook=False):
+        if x_feat is None:
+            x_feat = self.spec_transform(x)
+        else:
+            x_feat = rearrange(x_feat, "b h w c -> b c h w") 
+
+        enc_hs, H,W = self.encoder(x_feat)
+        recon_feat, _, codes, cm_loss, cb_loss = self.decoder(enc_hs, num_streams, self.quantizers, freeze_codebook)
+        recon_x = self.audio_reconstruct(recon_feat)
+
+        return {
+                "cm_loss": cm_loss,
+                "cb_loss": cb_loss,
+                "raw_audio": x,
+                "recon_audio": recon_x,
+                "raw_feat": x_feat, 
+                "recon_feat": recon_feat,
+                "codes": codes
+            }
+
+    def forward(self, x, x_feat, num_streams, freeze_codebook=False):
+        """ Forward Function.
+        Args: 
+            x: audio Tensor
+            x_feat: audio complex STFT
+            num_streams: number of streams transmitted
+            train: set False in inference
+            freeze_codebook: boolean set True only during pretraining stage (meanwhile streams has to be max_stream)
+        """
+        num_streams = self.max_streams if freeze_codebook else num_streams
+        return self.forward_one_step(x, x_feat, num_streams, freeze_codebook)
 
 
 class ConvEncoder(nn.Module):
@@ -144,9 +196,64 @@ class ConvDecoder(nn.Module):
 
 
 class CrossScaleConvDecoder(CrossScaleRVQ):
-    def __init__(self, backbone="conv") -> None:
-        super().__init__(backbone)
+    def __init__(self, in_dim:int=2, h_dims:list=[64,32,24,24,16,16], kernel_size:tuple=(5,2), depth:int=1,) -> None:
+        super().__init__(backbone="conv")
 
+        ins, outs = h_dims, h_dims[1:] + [in_dim]
+    
+        blocks = nn.ModuleList()
+        for i in range(len(h_dims)-1):
+            blocks.append(
+                ConvolutionLayer(ins[i], outs[i], depth, kernel_size, transpose=True)
+            )
+        self.dec_blks = blocks
+        self.post_conv = Convolution2D(ins[-1], outs[-1], kernel_size, scale=False)
+
+    def forward(self, enc_hs: list, num_streams: int, quantizers: nn.ModuleList, freeze_codebook: bool=False):
+        """Forward Function: Step-wise cross-scale decoding
+        Args: 
+            enc_hs: a list of encoded features at all scales
+            num_streams: number of bitstreams to use
+            quantizers: a modulelist of multi-scale quantizers
+            freeze_codebook: boolean (True when no codebook is used in pretraining)
+            returns: 
+                recon_feat: reconstructed complex spectrum (B,2,F,T)
+                dec_hs: list of decoded hidden states
+                codes: discrete indices (B,num_streams,group_size,T//overlap) 
+                       num_streams is always max_stream in training mode
+                cm_loss, cb_loss: VQ losses (B,)
+        """
+        z0, cm_loss, cb_loss, code = self.csrvq(enc=enc_hs[-1], dec=0.0, vq=quantizers[0], 
+                                                transmit=True, freeze_codebook=freeze_codebook)
+        codes, dec_hs = [code], [z0]
+        for i, blk in enumerate(self.dec_blks):
+            transmit = (i < num_streams-1)    
+            if self.training is True: # passing all quantizers during training
+                dec_i_refine, cm_loss_i, cb_loss_i, code_i = self.csrvq(
+                                                        enc=enc_hs[-1-i], dec=dec_hs[i],
+                                                        vq=quantizers[i+1], transmit=transmit, freeze_codebook=freeze_codebook
+                                                        )
+                cm_loss += cm_loss_i
+                cb_loss += cb_loss_i
+                codes.append(code_i)
+            else:                     # passing only transmitted quantizers during testing
+                if transmit:
+                    dec_i_refine, cm_loss_i, cb_loss_i, code_i = self.csrvq(
+                                                        enc=enc_hs[-1-i], dec=dec_hs[i],
+                                                        vq=quantizers[i+1], transmit=True, freeze_codebook=False
+                                                        )
+                    cm_loss += cm_loss_i
+                    cb_loss += cb_loss_i
+                    codes.append(code_i)
+                else:
+                    dec_i_refine = dec_hs[i]
+            
+            dec_next = blk(dec_i_refine)
+            dec_hs.append(dec_next)
+
+        recon_feat = self.post_conv(dec_next)
+        codes = torch.stack(codes, dim=1)   # [B, num_streams, group_size, T]
+        return recon_feat, dec_hs, codes, cm_loss, cb_loss
 
 class SwinTDecoder(nn.Module):
     def __init__(self,                  
