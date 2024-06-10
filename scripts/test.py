@@ -77,17 +77,18 @@ def run(args):
     metric_funcs = {"PESQ": PESQ(), "MelDistance": MelSpectrogramDistance().to(args.device), "SISDR": SISDR().to(args.device)}
 
     # Model
-    model = make_model(read_yaml(f"{args.model_path}/config.yaml")['model'])
+    cfg = read_yaml(f"{args.model_path}/config.yaml")
+    model = make_model(cfg['model'], cfg['model_name'])
     model.load_state_dict(
         torch.load(f"{args.model_path}/model.pth", map_location="cpu")["model_state_dict"],
     )
     model = model.to(args.device)
-    e_counter = EntropyCounter(model.quantizers[0].codebook_size, num_streams=model.max_streams, 
-                               num_groups=model.quantizers[0].num_vqs, device=args.device)
+    e_counter = EntropyCounter(cfg['model']['codebook_size'], num_streams=cfg['model']['max_streams'], 
+                               num_groups=cfg['model']['group_size'], device=args.device)
 
     performances = eval_epoch(
             model, eval_loader, metric_funcs, e_counter, args.device,
-            num_streams=None, verbose=True # evaluate across all bitrates
+            num_streams=None, verbose=True, bps_per_stream=1.5, # evaluate across all bitrates
         )
     
     save_path = args.model_path if args.save_path is None else args.save_path
@@ -105,6 +106,27 @@ python -m scripts.test \
     --eval_folder_path ../evaluation_set/test \
     --batch_size 12 \
     --model_path ./esc9kbps \
+    --device cuda
+
+
+python -m scripts.test \
+    --eval_folder_path ../data/ESC_evaluation/test \
+    --batch_size 6 \
+    --model_path ../output/csvq_conv_9kbps \
+    --device cuda
+
+export CUDA_VISIBLE_DEVICES=1
+python -m scripts.test \
+    --eval_folder_path ../data/ESC_evaluation/test \
+    --batch_size 6 \
+    --model_path ../output/rvq_conv_9kbps \
+    --device cuda
+
+export CUDA_VISIBLE_DEVICES=2
+python -m scripts.test \
+    --eval_folder_path ../data/ESC_evaluation/test \
+    --batch_size 6 \
+    --model_path ../output/rvq_swinT_9kbps \
     --device cuda
 
 """
