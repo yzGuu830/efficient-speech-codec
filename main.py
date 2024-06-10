@@ -52,12 +52,12 @@ accelerate launch main.py \
 # CSVQ + SwinT
 accelerate launch main.py \
     --exp_name csvq_swinT_9kbps \
-    --config_path ./configs/9kbps_csvq_swinT.yaml \
+    --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
     --wandb_project ESC-EMNLP-2025 \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
-    --num_devices 2 \
+    --num_devices 4 \
     --dropout_rate 0.75 \
     --save_path ../output \
     --seed 53
@@ -70,8 +70,21 @@ accelerate launch main.py \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
-    --num_devices 2 \
+    --num_devices 4 \
     --dropout_rate 0.75 \
+    --save_path ../output \
+    --seed 53
+
+accelerate launch main.py \
+    --exp_name csvq_conv_9kbps \
+    --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
+    --wandb_project ESC-EMNLP-2025 \
+    --lr 1.0e-4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 5 \
+    --num_devices 4 \
+    --dropout_rate 0.75 \
+    --pretrain_ckp ../output/csvq_conv_9kbps/pretrained.pth \
     --save_path ../output \
     --seed 53
 
