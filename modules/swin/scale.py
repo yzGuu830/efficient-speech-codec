@@ -27,16 +27,21 @@ class PatchEmbed(nn.Module):
                  in_chans: int=2,
                  patch_size: tuple=(3,2),
                  embed_dim: int=48,
-                 norm_layer=nn.LayerNorm):
+                 norm_layer=nn.LayerNorm,
+                 backbone="swinT",):
         super().__init__()
 
         self.H = freq // patch_size[0]
         self.proj = nn.Conv2d(in_chans, embed_dim, patch_size, patch_size)
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
+        self.backbone = backbone
 
     def forward(self, x):
 
         x = self.proj(x)                          # B2FT -> BCHW
+        if self.backbone == "conv":
+            return x # for convolution backbones, no normalization
+        
         x = rearrange(x, "b c h w -> b (h w) c")  # BCHW -> BCL -> BLC
         x = self.norm(x)
         return x
@@ -47,11 +52,13 @@ class PatchDeEmbed(nn.Module):
                  freq: int=192,
                  in_chans: int=2,
                  patch_size: tuple=(3,2),
-                 embed_dim: int=48,):
+                 embed_dim: int=48,
+                 backbone="swinT",):
         super().__init__()
 
         self.patch_size = patch_size
         self.H = freq // patch_size[0]
+        self.backbone = backbone
 
         self.de_proj1 = nn.Conv2d(embed_dim,
                            embed_dim*patch_size[0]*patch_size[1], 
@@ -61,10 +68,13 @@ class PatchDeEmbed(nn.Module):
                                   kernel_size=3, stride=1, padding=1)   
 
     def forward(self, x):
-        x = rearrange(x, "b (h w) c -> b c h w", h=self.H)
+        if self.backbone == "swinT":
+            x = rearrange(x, "b (h w) c -> b c h w", h=self.H)
+        
         x = self.de_proj1(x)                                    # B C*scale H W  
         x = pixel_shuffle(x.permute(0,2,3,1), self.patch_size)  # B F T C
         x = self.de_proj2(x.permute(0,3,1,2))                   # BCFT -> B2FT
+        
         return x
 
 class PatchMerge(nn.Module):

@@ -3,7 +3,7 @@ import torch.nn as nn
 from einops import rearrange
 
 from models.esc import BaseAudioCodec, CrossScaleRVQ, SwinTEncoder
-from modules import ConvolutionLayer, TransformerLayer, Convolution2D, PatchDeEmbed
+from modules import ConvolutionLayer, TransformerLayer, Convolution2D, PatchEmbed, PatchDeEmbed
 
 class RVQCodecs(BaseAudioCodec):
     """
@@ -40,8 +40,8 @@ class RVQCodecs(BaseAudioCodec):
             self.encoder = SwinTEncoder(in_freq, in_dim, h_dims, patch_size, swin_heads, swin_depth, window_size, mlp_ratio)
             self.decoder = SwinTDecoder(in_freq, in_dim, h_dims[::-1], patch_size, swin_heads[::-1], swin_depth, window_size, mlp_ratio)
         elif backbone=="conv":
-            self.encoder = ConvEncoder(in_dim, h_dims, tuple(kernel_size), conv_depth)
-            self.decoder = ConvDecoder(in_dim, h_dims[::-1], tuple(kernel_size), conv_depth) 
+            self.encoder = ConvEncoder(in_dim, h_dims, tuple(patch_size), tuple(kernel_size), conv_depth)
+            self.decoder = ConvDecoder(in_dim, h_dims[::-1], tuple(patch_size), tuple(kernel_size), conv_depth) 
         else:
             raise ValueError("backbone argument should be either `swinT` or `conv`")
 
@@ -95,6 +95,7 @@ class CSVQConvCodec(BaseAudioCodec):
                  max_streams: int, 
                  kernel_size: list=[5,2],
                  conv_depth: int=1,
+                 patch_size: list=[3,2],
                  overlap: int=4,
                  group_size: int=3,
                  codebook_dim: int=8,
@@ -107,13 +108,12 @@ class CSVQConvCodec(BaseAudioCodec):
         super().__init__(in_dim, in_freq, h_dims, max_streams, win_len, hop_len, sr)
 
         self.quantizers = self.init_product_vqs(
-                    patch_size=(1,1), overlap=overlap, group_size=group_size, 
+                    patch_size=patch_size, overlap=overlap, group_size=group_size, 
                     codebook_dims=[codebook_dim]*max_streams, codebook_size=codebook_size, 
                     l2norm=l2norm, init_method=init_method,
                 )
-        self.encoder = ConvEncoder(in_dim, h_dims, tuple(kernel_size), conv_depth)
-        self.decoder = CrossScaleConvDecoder(in_dim, h_dims[::-1], tuple(kernel_size), conv_depth)
-
+        self.encoder = ConvEncoder(in_dim, h_dims, tuple(patch_size), tuple(kernel_size), conv_depth)
+        self.decoder = CrossScaleConvDecoder(in_dim, h_dims[::-1], tuple(patch_size), tuple(kernel_size), conv_depth)
 
     def forward_one_step(self, x, x_feat=None, num_streams=6, freeze_codebook=False):
         if x_feat is None:
@@ -149,10 +149,12 @@ class CSVQConvCodec(BaseAudioCodec):
 
 
 class ConvEncoder(nn.Module):
-    def __init__(self, in_dim:int=2, h_dims:list=[16,16,24,24,32,64], kernel_size:tuple=(5,2), depth:int=1) -> None:
+    def __init__(self, in_dim:int=2, h_dims:list=[16,16,24,24,32,64], patch_size:tuple=(3,2), kernel_size:tuple=(5,2), depth:int=1) -> None:
         super().__init__()
 
-        ins, outs = [in_dim] + h_dims, h_dims
+        self.patch_embed = PatchEmbed(192, in_dim, patch_size, embed_dim=h_dims[0], norm_layer=False, backbone="conv")
+
+        ins, outs = [h_dims[0]] + h_dims, h_dims
         self.pre_conv = Convolution2D(ins[0], outs[0], kernel_size, scale=False)
 
         blocks = nn.ModuleList()
@@ -163,6 +165,7 @@ class ConvEncoder(nn.Module):
         self.enc_blks = blocks
 
     def forward(self, x):
+        x = self.patch_embed(x)
         x = self.pre_conv(x)
 
         enc_hs = [x]
@@ -174,9 +177,9 @@ class ConvEncoder(nn.Module):
 
 
 class ConvDecoder(nn.Module):
-    def __init__(self, in_dim:int=2, h_dims:list=[64,32,24,24,16,16], kernel_size:tuple=(5,2), depth:int=1) -> None:
+    def __init__(self, in_dim:int=2, h_dims:list=[64,32,24,24,16,16], patch_size:tuple=(3,2), kernel_size:tuple=(5,2), depth:int=1) -> None:
         super().__init__()
-        ins, outs = h_dims, h_dims[1:] + [in_dim]
+        ins, outs = h_dims, h_dims[1:] + [h_dims[-1]]
     
         blocks = nn.ModuleList()
         for i in range(len(h_dims)-1):
@@ -185,6 +188,7 @@ class ConvDecoder(nn.Module):
             )
         self.dec_blks = blocks
         self.post_conv = Convolution2D(ins[-1], outs[-1], kernel_size, scale=False)
+        self.patch_deembed = PatchDeEmbed(192, in_dim, patch_size, h_dims[-1], backbone="conv")
 
     def forward(self, z_q, feat_shape):
     
@@ -192,14 +196,15 @@ class ConvDecoder(nn.Module):
             z_q = blk(z_q)
 
         recon_x = self.post_conv(z_q)
+        recon_x = self.patch_deembed(recon_x)
         return recon_x
 
 
 class CrossScaleConvDecoder(CrossScaleRVQ):
-    def __init__(self, in_dim:int=2, h_dims:list=[64,32,24,24,16,16], kernel_size:tuple=(5,2), depth:int=1,) -> None:
+    def __init__(self, in_dim:int=2, h_dims:list=[64,32,24,24,16,16], patch_size:tuple=(3,2), kernel_size:tuple=(5,2), depth:int=1,) -> None:
         super().__init__(backbone="conv")
 
-        ins, outs = h_dims, h_dims[1:] + [in_dim]
+        ins, outs = h_dims, h_dims[1:] + [h_dims[-1]]
     
         blocks = nn.ModuleList()
         for i in range(len(h_dims)-1):
@@ -208,6 +213,7 @@ class CrossScaleConvDecoder(CrossScaleRVQ):
             )
         self.dec_blks = blocks
         self.post_conv = Convolution2D(ins[-1], outs[-1], kernel_size, scale=False)
+        self.patch_deembed = PatchDeEmbed(192, in_dim, patch_size, h_dims[-1], backbone="conv")
 
     def forward(self, enc_hs: list, num_streams: int, quantizers: nn.ModuleList, freeze_codebook: bool=False):
         """Forward Function: Step-wise cross-scale decoding
@@ -223,6 +229,7 @@ class CrossScaleConvDecoder(CrossScaleRVQ):
                        num_streams is always max_stream in training mode
                 cm_loss, cb_loss: VQ losses (B,)
         """
+        print("enc_hs[-1]: ", enc_hs[-1].shape)
         z0, cm_loss, cb_loss, code = self.csrvq(enc=enc_hs[-1], dec=0.0, vq=quantizers[0], 
                                                 transmit=True, freeze_codebook=freeze_codebook)
         codes, dec_hs = [code], [z0]
@@ -252,6 +259,7 @@ class CrossScaleConvDecoder(CrossScaleRVQ):
             dec_hs.append(dec_next)
 
         recon_feat = self.post_conv(dec_next)
+        recon_feat = self.patch_deembed(recon_feat)
         codes = torch.stack(codes, dim=1)   # [B, num_streams, group_size, T]
         return recon_feat, dec_hs, codes, cm_loss, cb_loss
 

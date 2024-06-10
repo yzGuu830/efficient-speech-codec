@@ -77,11 +77,9 @@ class BaseAudioCodec(nn.Module):
 
     def init_residual_vqs(self, patch_size: tuple, overlap: int, num_product_vqs: int, num_residual_vqs: int, 
                 codebook_dim: int, codebook_size: int, l2norm: bool, backbone: str):
-        if backbone == "swinT":
-            freq_patch, time_patch = patch_size
-            H = self.in_freq//freq_patch
-        elif backbone == "conv":
-            H = self.in_freq 
+        
+        freq_patch, time_patch = patch_size
+        H = self.in_freq//freq_patch
 
         quantizers = ProductResidualVectorQuantize(
             in_dim=self.dec_h_dims[0], in_freq=H//2**(self.max_streams-1),
@@ -91,20 +89,27 @@ class BaseAudioCodec(nn.Module):
         return quantizers
 
     def print_codec(self):
-        freq_dims, hidden_dims, reshaped_dims, individual_dims, codebook_dims = [], [], [], [], []
-        for pvq in self.quantizers:
-            freq_dims.append(pvq.in_freq)
-            hidden_dims.append(pvq.in_dim)
-            reshaped_dims.append(pvq.fix_dim)
-            individual_dims.append(pvq.fix_dim*pvq.overlap//pvq.num_vqs)
-            codebook_dims.append(pvq.codebook_dim)
-            
-        print("Codec Visualization [from bottom to top]: ")
-        print("     Freq dims:                ", freq_dims)
-        print("     Channel(hidden) dims:     ", hidden_dims)
-        print("     Reshaped hidden dims:     ", reshaped_dims)
-        print("     Individual z_e dims:      ", individual_dims)
-        print("     Codebook dims:            ", codebook_dims)
+        if isinstance(self.quantizers, ProductResidualVectorQuantize):
+            print("Codec Visualization [only at bottom]")
+            print("     Freq dim:                ", self.quantizers.in_freq)
+            print("     Channel(hidden) dim:     ", self.quantizers.in_dim)
+            print("     Reshaped hidden dim:     ", self.quantizers.fix_dim)
+            print("     Individual z_e dim:      ", self.quantizers.fix_dim*self.quantizers.overlap//len(self.quantizers.vqs))
+            print("     Codebook dim:            ", self.quantizers.codebook_dim)
+        else:
+            freq_dims, hidden_dims, reshaped_dims, individual_dims, codebook_dims = [], [], [], [], []
+            for pvq in self.quantizers:
+                freq_dims.append(pvq.in_freq)
+                hidden_dims.append(pvq.in_dim)
+                reshaped_dims.append(pvq.fix_dim)
+                individual_dims.append(pvq.fix_dim*pvq.overlap//pvq.num_vqs)
+                codebook_dims.append(pvq.codebook_dim)
+            print("Codec Visualization [from bottom to top]: ")
+            print("     Freq dims:                ", freq_dims)
+            print("     Channel(hidden) dims:     ", hidden_dims)
+            print("     Reshaped hidden dims:     ", reshaped_dims)
+            print("     Individual z_e dims:      ", individual_dims)
+            print("     Codebook dims:            ", codebook_dims)
     
 class ESC(BaseAudioCodec):
     def __init__(self, in_dim: int=2, in_freq: int=192, h_dims: list=[45,45,72,96,192,384],
