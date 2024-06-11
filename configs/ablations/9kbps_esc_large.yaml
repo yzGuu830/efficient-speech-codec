@@ -1,0 +1,33 @@
+data:
+    train_data_path: ../data/dnscustom/processed_wav/train
+    val_data_path: ../data/dnscustom/processed_wav/test
+    num_workers: 36
+    train_bs_per_device: 9
+    val_bs_per_device: 6
+
+model_name: csvq+swinT
+model:
+    in_dim: 2
+    in_freq: 192
+    h_dims: [45,72,96,144,192,384]
+    max_streams: 6
+    patch_size: [3,2]
+    swin_heads: [3,6,12,24,24]
+    swin_depth: 4 #6
+    window_size: 4
+    mlp_ratio: 4.
+    overlap: 2
+    group_size: 3
+    codebook_size: 1024
+    codebook_dims: [8,8,8,8,8,8]
+    l2norm: True
+    init_method: kaiming
+    win_len: 20
+    hop_len: 5
+    sr: 16000
+
+loss:
+    stft_weight: 1.0
+    cm_weight: .25
+    cb_weight: 1.0
+    mel_weight: .25
