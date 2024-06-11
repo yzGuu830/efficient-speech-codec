@@ -229,7 +229,6 @@ class CrossScaleConvDecoder(CrossScaleRVQ):
                        num_streams is always max_stream in training mode
                 cm_loss, cb_loss: VQ losses (B,)
         """
-        print("enc_hs[-1]: ", enc_hs[-1].shape)
         z0, cm_loss, cb_loss, code = self.csrvq(enc=enc_hs[-1], dec=0.0, vq=quantizers[0], 
                                                 transmit=True, freeze_codebook=freeze_codebook)
         codes, dec_hs = [code], [z0]
