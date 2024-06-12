@@ -71,6 +71,48 @@ class ProductResidualVectorQuantize(nn.Module):
 
         return (z_q, indices), (commitment_loss/len(self.vqs), codebook_loss/len(self.vqs))
 
+    def encode(self, z_e, num_streams):
+        """
+        Args:
+            z_e: latent at bottleneck
+            num_streams: number of recursive vqs used
+        """
+        dims = len(z_e.shape)
+        z_e = pre_process(z_e, self.in_freq, self.overlap, self.fix_dim, dims)
+
+        indices = []
+        s_idx = 0
+        for i, rvq in enumerate(self.vqs):
+            e_idx = s_idx+self.vq_dims[i]
+            z_e_i = z_e[..., s_idx:e_idx]
+
+            z_e_down_i = rvq.proj_down(z_e_i) if rvq.do_proj else z_e_i
+            indices_i = rvq.quantize_to_code(z_e_down_i, num_streams)
+            indices.append(indices_i) # [B, num_rvqs, T]
+
+            s_idx = e_idx
+
+        indices = torch.stack(indices, dim=2)
+        return indices
+
+    def decode(self, codes, dims=3):
+        """
+        Args:
+            codes: quantized residuals with shape (B, num_streams, group_size, T)
+            dims: 3 for swinT / 4 for conv
+        """
+
+        z_q = []
+        for i, rvq in enumerate(self.vqs):
+            z_q_down_i = rvq.dequantize_code(codes[..., i, :])
+
+            z_q_i = rvq.proj_up(z_q_down_i) if rvq.do_proj else z_q_down_i
+            z_q.append(z_q_i)
+
+        z_q = post_process(torch.cat(z_q, dim=-1), self.in_freq, self.overlap, self.fix_dim, dims) # [B, H*W, C] / [B, C, H, W]   
+        return z_q
+
+
 class ResidualVectorQuantize(nn.Module):
     "Residual VQ Layer"
     def __init__(self,
@@ -160,6 +202,56 @@ class ResidualVectorQuantize(nn.Module):
         z_q = post_process(z_q, self.in_freq, self.overlap, self.fix_dim, dims) # [B, H*W, C] / [B, C, H, W]
 
         return (z_q, indices), (commitment_loss, codebook_loss)
+
+    def quantize_to_code(self, z_e, num_streams):
+        
+        indices, residual = [], z_e
+        for i, vq in enumerate(self.vqs):
+
+            code_i = vq.encode(residual)
+            indices.append(code_i)
+            if len(indices) == num_streams:
+                break
+            
+            z_q_i = vq.decode(code_i)
+            residual = residual - z_q_i
+            
+        indices = torch.stack(indices, dim=1) # [B, num_streams, T]
+        return indices
+
+    def dequantize_code(self, codes):
+
+        z_q = 0.
+        for i in range(codes.size(1)):
+            z_q += self.vqs[i].decode(codes[:, i])
+
+        return z_q
+        
+
+    def encode(self, z_e, num_streams):
+        """
+        Args:
+            z_e: latent at bottleneck
+            num_streams: number of recursive vqs used
+        """
+
+        dims = len(z_e.shape)
+        z_e = pre_process(z_e, self.in_freq, self.overlap, self.fix_dim, dims) # [B, W//overlap, overlap*H*C]
+        z_e_down = self.proj_down(z_e) if self.do_proj else z_e    
+        indices = self.quantize_to_code(z_e_down, num_streams)
+        return indices
+
+    def decode(self, codes, dims=3):
+        """
+        Args:
+            codes: quantized residuals with shape (B, num_streams, T)
+            dims: 3 for swinT / 4 for conv
+        """
+
+        z_q_down = self.dequantize_code(codes)
+        z_q = self.proj_up(z_q_down) if self.do_proj else z_q_down
+        z_q = post_process(z_q, self.in_freq, self.overlap, self.fix_dim, dims) # [B, H*W, C] / [B, C, H, W]
+        return z_q
 
 class ProductVectorQuantize(nn.Module):
     "Product VQ Layer"

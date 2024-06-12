@@ -82,6 +82,21 @@ class RVQCodecs(BaseAudioCodec):
         """
         return self.forward_one_step(x, x_feat, num_streams, freeze_codebook)
 
+    @torch.no_grad()
+    def encode(self, x, num_streams=6):
+        x_feat = self.spec_transform(x)
+        enc_hs, H,W = self.encoder(x_feat)
+        codes = self.quantizers.encode(enc_hs[-1], num_streams)
+        return codes, (H,W)
+    
+    @torch.no_grad()
+    def decode(self, codes, feat_shape, dims=3):
+
+        z_q = self.quantizers.decode(codes, dims=dims)
+        recon_feat = self.decoder(z_q, feat_shape)
+        recon_x = self.audio_reconstruct(recon_feat)
+        return recon_x
+
 
 class CSVQConvCodec(BaseAudioCodec):
     """
@@ -146,6 +161,19 @@ class CSVQConvCodec(BaseAudioCodec):
         """
         num_streams = self.max_streams if freeze_codebook else num_streams
         return self.forward_one_step(x, x_feat, num_streams, freeze_codebook)
+
+    @torch.no_grad()
+    def encode(self, x, num_streams=6):
+        x_feat = self.spec_transform(x)
+        enc_hs, H,W = self.encoder(x_feat)
+        codes = self.decoder.encode(enc_hs, num_streams, self.quantizers)
+        return codes, (H,W)
+    
+    @torch.no_grad()
+    def decode(self, codes):
+        dec_hs = self.decoder.decode(codes, self.quantizers)
+        recon_x = self.audio_reconstruct(dec_hs[-1])
+        return recon_x
 
 
 class ConvEncoder(nn.Module):
@@ -261,6 +289,57 @@ class CrossScaleConvDecoder(CrossScaleRVQ):
         recon_feat = self.patch_deembed(recon_feat)
         codes = torch.stack(codes, dim=1)   # [B, num_streams, group_size, T]
         return recon_feat, dec_hs, codes, cm_loss, cb_loss
+
+    def encode(self, enc_hs: list, num_streams: int, quantizers: nn.ModuleList):
+        """Encode audio into indices
+        Args: 
+            enc_hs: a list of encoded features at all scales
+            num_streams: number of bitstreams to use
+            quantizers: a modulelist of multi-scale quantizers
+        returns: multi-scale codes with shape (B, num_streams, group_size, T)
+        """
+        code0 = quantizers[0].encode(enc_hs[-1]) # [B, group_size, T]
+        if num_streams == 1:
+            return code0.unsqueeze(1)
+        
+        z0 = quantizers[0].decode(code0, dims=4)
+        codes, dec_hs = [code0], [z0]
+        for i in range(num_streams-1):
+            
+            codei = self.csrvq_encode(enc=enc_hs[-1-i], dec=dec_hs[i], vq=quantizers[i+1])
+            codes.append(codei)
+            if len(codes) == num_streams: break
+
+            dec_i_refine = self.csrvq_decode(codei, dec=dec_hs[i], vq=quantizers[i+1])
+            dec_next = self.dec_blks[i](dec_i_refine)
+            dec_hs.append(dec_next)
+        
+        codes = torch.stack(codes, dim=1) 
+        return codes    # [B, num_streams, group_size, T]
+    
+    def decode(self, codes: list, quantizers: nn.ModuleList):
+        """Decode from indices
+        Args: 
+            codes: multi-scale codes with shape (B, num_streams, group_size, T)
+            quantizers: a modulelist of multi-scale quantizers
+        returns: decoded hidden states
+        """
+        num_streams = codes.size(1)
+
+        z0 = quantizers[0].decode(codes[:, 0], dims=4)
+        dec_hs = [z0]
+        for i in range(len(self.dec_blks)): # using code of residuals to refine decoding
+            if i < num_streams-1:
+                dec_i_refine = self.csrvq_decode(codes=codes[:, i+1], dec=dec_hs[i], vq=quantizers[i+1])
+            else:
+                dec_i_refine = dec_hs[i]
+            dec_next = self.dec_blks[i](dec_i_refine)
+            dec_hs.append(dec_next)
+
+        dec_next = self.post_conv(dec_next)
+        dec_hs.append(self.patch_deembed(dec_next))
+        return dec_hs
+
 
 class SwinTDecoder(nn.Module):
     def __init__(self,                  
