@@ -167,7 +167,7 @@ class ESC(BaseAudioCodec):
         return codes, (H,W)
     
     @torch.no_grad()
-    def decode(self, codes, feat_shape=(2,300)):
+    def decode(self, codes, feat_shape=(2,300), dims=3):
         dec_hs = self.decoder.decode(codes, self.quantizers, feat_shape)
         recon_feat = dec_hs[-1]
         recon_x = self.audio_reconstruct(recon_feat)

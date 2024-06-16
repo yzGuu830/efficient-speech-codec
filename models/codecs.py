@@ -170,7 +170,7 @@ class CSVQConvCodec(BaseAudioCodec):
         return codes, (H,W)
     
     @torch.no_grad()
-    def decode(self, codes):
+    def decode(self, codes, feat_shape, dims=4):
         dec_hs = self.decoder.decode(codes, self.quantizers)
         recon_x = self.audio_reconstruct(dec_hs[-1])
         return recon_x
