@@ -53,7 +53,7 @@ accelerate launch main.py \
 accelerate launch main.py \
     --exp_name csvq_swinT_9kbps \
     --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
-    --wandb_project ESC-EMNLP-2025 \
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
@@ -66,7 +66,7 @@ accelerate launch main.py \
 accelerate launch main.py \
     --exp_name csvq_conv_9kbps \
     --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
-    --wandb_project ESC-EMNLP-2025 \
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
@@ -78,7 +78,7 @@ accelerate launch main.py \
 accelerate launch main.py \
     --exp_name csvq_conv_9kbps \
     --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
-    --wandb_project ESC-EMNLP-2025 \
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
@@ -92,7 +92,7 @@ accelerate launch main.py \
 accelerate launch main.py \
     --exp_name rvq_conv_9kbps \
     --config_path ./configs/ablations/9kbps_rvq_conv.yaml \
-    --wandb_project ESC-EMNLP-2025 \
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 5 \
@@ -105,7 +105,7 @@ accelerate launch main.py \
 accelerate launch main.py \
     --exp_name rvq_swinT_9kbps \
     --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
-    --wandb_project ESC-EMNLP-2025 \
+    --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
     --num_pretraining_epochs 10 \
@@ -117,7 +117,7 @@ accelerate launch main.py \
 # accelerate launch main.py \
 #     --exp_name rvq_swinT_9kbps \
 #     --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
-#     --wandb_project ESC-EMNLP-2025 \
+#     --wandb_project efficient-speech-codec \
 #     --lr 1.0e-4 \
 #     --num_epochs 50 \
 #     --num_pretraining_epochs 10 \
