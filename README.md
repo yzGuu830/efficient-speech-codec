@@ -1,7 +1,7 @@
 # ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
 
 [arXiv] This is the code repository for the ESC codec presented in the [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://arxiv.org/abs/2404.19441) paper. 
-- Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps efficiently while maintaining comparative reconstruction quality to Descript's audio codec. 
+- Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps more efficiently while maintaining comparative reconstruction quality to Descript's audio codec. 
 - We provide [Model Checkpoints](#model-checkpoints) for different ESC variants and DAC models, along with a [Demo Page](https://western-spatula-93a.notion.site/Efficient-Speech-Codec-0e513f33cf104f799e16bcad015b03ef?pvs=4) for multilingual speech audios. 
 
 ![An illustration of ESC Architecture](assets/architecture.png)
@@ -11,12 +11,12 @@
 
 | Codec  | Checkpoint                                      | #Param. |
 |--------|-------------------------------------------------|----------|
-| ESC-Base(non-adv)  | [Download](https://drive.google.com/file/d/1UuGUxzTwHtio4xcHyRSiCIYOsG6botD9/view?usp=sharing) | 8.39M    |
-| ESC-Base(adv)      | [Download](https://drive.google.com/file/d/1Un4jCopf6EOKQug6A6kb4P33ZpUBJSNL/view?usp=sharing) | 8.39M    |
-| ESC-Large(non-adv) | [Download](https://drive.google.com/file/d/12BUPT6zcolAE6gW1AwrvpNtykwoksbxh/view?usp=sharing) | 15.58M   |
-| DAC-Base(adv)      | [Download](https://drive.google.com/file/d/17GmTHYa_V6s-OBMmZfvP6Zm08LsDVUo-/view?usp=sharing) | 74.31M   |
-| DAC-Tiny(adv)      | [Download](https://drive.google.com/file/d/13THnYCuboOBM9ULIQYR6TppMGf2ASUGH/view?usp=sharing) | 8.17M    |
-| DAC-Tiny(non-adv)  | [Download](https://drive.google.com/file/d/1-GzuTph9FxCeRg0a0R-IaQ4Py27QXXBX/view?usp=sharing) | 8.17M    |
+| ESC-Base           | [Download](https://drive.google.com/file/d/1OF1ab3az6nKOY8owSUhUH0ksYHFmR1bc/view?usp=sharing) | 8.39M    |
+| ESC-Base(adv)      | [Download](https://drive.google.com/file/d/1_g1dFYhY7qXKWkcq8_Q6I-kv8tQW_SF7/view?usp=sharing) | 8.39M    |
+| ESC-Large          | [Download](https://drive.google.com/file/d/180Q4zctqeNnDmRvoMsVQ-3iCB5FriJbN/view?usp=sharing) | 15.58M   |
+| DAC-Tiny(adv)      | [Download](https://drive.google.com/file/d/1ED-B_S7ftsb8CqoFGTNkWUIrMKrk-iiu/view?usp=sharing) | 8.17M    |
+| DAC-Tiny           | [Download](https://drive.google.com/file/d/1jk8zPYBYmxgsiSzrgoQynF6hnzoiIuX8/view?usp=sharing) | 8.17M    |
+| DAC-Base(adv)      | [Download](https://drive.google.com/file/d/1moy0FX-aPlx54MajBRuE-zjYeNlJUjI6/view?usp=sharing) | 74.31M   |
 
 
 ### Install Dev Dependencies
@@ -65,4 +65,4 @@ This will run codec evaluation at all bandwidth on a test set folder. We provide
 ## Results
 
 ![Performance Evaluation](assets/results.png)
-We provide a performance comparison with Descript's audio codec (DAC) at different scales of model sizes (w and w/o adversarial trainings). 
+We provide a performance comparison of ESC with Descript's audio codec (DAC) at different scales of model sizes (w/ and w/o adversarial trainings).
