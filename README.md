@@ -1,6 +1,6 @@
-# ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers
+# Efficient Speech Coding with Cross-Scale Residual Vector Quantized Transformers
 
-[arXiv] This is the code repository for the ESC codec presented in the [ESC: High-Fidelity Speech Coding with Efficient Cross-Scale Vector Quantized Transformers](https://arxiv.org/abs/2404.19441) paper. 
+[arXiv] This is the code repository for the ESC codec presented in the [ESC: Efficient Speech Coding with Cross-Scale Residual Vector Quantized Transformers](https://arxiv.org/abs/2404.19441) paper. 
 - Our neural speech codec, within only 30MB, can compress 16kHz speech to 1.5, 3, 4.5, 6, 7.5 and 9kbps more efficiently while maintaining comparative reconstruction quality to Descript's audio codec. 
 - We provide [Model Checkpoints](#model-checkpoints) for different ESC variants and DAC models, along with a [Demo Page](https://western-spatula-93a.notion.site/Efficient-Speech-Codec-0e513f33cf104f799e16bcad015b03ef?pvs=4) for multilingual speech audios. 
 
