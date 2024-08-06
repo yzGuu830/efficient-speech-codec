@@ -1,6 +1,6 @@
-from scripts.metrics import EntropyCounter, PESQ, MelSpectrogramDistance, SISDR
-from models import make_model
-from utils import read_yaml
+from .metrics import EntropyCounter, PESQ, MelSpectrogramDistance, SISDR
+from .utils import read_yaml
+from esc.models import make_model
 
 from torch.utils.data import DataLoader, Dataset, default_collate
 from tqdm import tqdm

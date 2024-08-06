@@ -1,5 +1,5 @@
-from models import make_model
-from utils import read_yaml
+from esc.models import make_model
+from .utils import read_yaml
 import torch, os, torchaudio, argparse, warnings
 warnings.filterwarnings("ignore")
 

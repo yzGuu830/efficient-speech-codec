@@ -3,10 +3,10 @@ import numpy as np
 from tqdm import tqdm
 from accelerate import Accelerator
 
-from models import make_model
-from scripts.test import eval_epoch
-from scripts.metrics import PESQ, MelSpectrogramDistance, SISDR, EntropyCounter
-from scripts.utils import *
+from esc.models import make_model
+from .test import eval_epoch
+from .metrics import PESQ, MelSpectrogramDistance, SISDR, EntropyCounter
+from .utils import *
 
 class Trainer:
     """Distributed Codec Trainer (non-adversarial)"""
@@ -73,17 +73,6 @@ class Trainer:
             for _, x in enumerate(self.train_dl):
 
                 if self.pbar.n == self.args.pretraining_steps+1:
-                    # start training involving vqs: initialization
-                    if "csvq" in self.config.model_name: 
-                        for pvq in self.accel.unwrap_model(self.model).quantizers:
-                            pvq.verbose_init = self.accel.is_main_process
-                            pvq.codebook_initialized.fill_(0)
-                        self.accel.print("Pretraining Done. Initializing PVQ codebooks")
-                    elif "rvq" in self.config.model_name:
-                        for rvq in self.accel.unwrap_model(self.model).quantizers.vqs:
-                            for vq in rvq.vqs:
-                                torch.nn.init.kaiming_normal_(vq.embedding.weight) 
-                        self.accel.print("Pretraining Done. Initializing RVQ codebooks")
                     # renew optimizer
                     optimizer = make_optimizer(self.accel.unwrap_model(self.model).parameters(), self.args.lr)
                     self.optimizer = self.accel.prepare(optimizer)
