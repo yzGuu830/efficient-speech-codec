@@ -5,8 +5,8 @@ data:
     train_bs_per_device: 9
     val_bs_per_device: 4
 
-model_name: csvq+swinT
 model:
+    backbone: transformer
     in_dim: 2
     in_freq: 192
     h_dims: [45,72,96,144,192,384]
@@ -24,7 +24,18 @@ model:
     codebook_size: 1024
     codebook_dims: [32,32,16,12,8,6]
     l2norm: True
-    init_method: kaiming
+
+discriminator:
+    sample_rate: 16000
+    rates: []
+    periods: [2, 3, 5, 7, 11]
+    fft_sizes: [2048, 1024, 512]
+    bands:
+        - [0.0, 0.1]
+        - [0.1, 0.25]
+        - [0.25, 0.5]
+        - [0.5, 0.75]
+        - [0.75, 1.0]
 
 loss:
     stft_weight: 1.0

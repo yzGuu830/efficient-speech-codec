@@ -35,10 +35,23 @@ if __name__ == "__main__":
 
 
 """
-# ESC Final
+# ESC-Base
 accelerate launch main.py \
-    --exp_name esc9kbps \
-    --config_path ./configs/9kbps_final.yaml \
+    --exp_name esc-base-9kbps \
+    --config_path ./configs/9kbps_esc_base.yaml \
+    --wandb_project efficient-speech-codec \
+    --lr 1.0e-4 \
+    --num_epochs 80 \
+    --num_pretraining_epochs 15 \
+    --num_devices 4 \
+    --dropout_rate 0.75 \
+    --save_path ../output \
+    --seed 53
+
+# ESC-Large
+accelerate launch main.py \
+    --exp_name esc-large-9kbps \
+    --config_path ./configs/9kbps_esc_large.yaml \
     --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 80 \
@@ -49,7 +62,7 @@ accelerate launch main.py \
     --seed 53
 
 
-# CSVQ + SwinT
+# CS-RVQ + SwinT
 accelerate launch main.py \
     --exp_name csvq_swinT_9kbps \
     --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
@@ -62,7 +75,7 @@ accelerate launch main.py \
     --save_path ../output \
     --seed 53
 
-# CSVQ + CNN 
+# CS-RVQ + CNN 
 accelerate launch main.py \
     --exp_name csvq_conv_9kbps \
     --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
@@ -72,19 +85,6 @@ accelerate launch main.py \
     --num_pretraining_epochs 5 \
     --num_devices 4 \
     --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-accelerate launch main.py \
-    --exp_name csvq_conv_9kbps \
-    --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 5 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --pretrain_ckp ../output/csvq_conv_9kbps/pretrained.pth \
     --save_path ../output \
     --seed 53
 
@@ -108,23 +108,23 @@ accelerate launch main.py \
     --wandb_project efficient-speech-codec \
     --lr 1.0e-4 \
     --num_epochs 50 \
-    --num_pretraining_epochs 10 \
+    --num_pretraining_epochs 5 \
     --num_devices 2 \
     --dropout_rate 0.75 \
     --save_path ../output \
     --seed 53
 
-# accelerate launch main.py \
-#     --exp_name rvq_swinT_9kbps \
-#     --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
-#     --wandb_project efficient-speech-codec \
-#     --lr 1.0e-4 \
-#     --num_epochs 50 \
-#     --num_pretraining_epochs 10 \
-#     --num_devices 2 \
-#     --dropout_rate 0.75 \
-#     --save_path ../output \
-#     --pretrain_ckp ../output/rvq_swinT_9kbps/pretrained.pth \
-#     --seed 53
+# CS-RVQ + SwinT (w/o pre-training)
+accelerate launch main.py \
+    --exp_name csvq_swinT_9kbps_wo_pretraining \
+    --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
+    --wandb_project efficient-speech-codec \
+    --lr 1.0e-4 \
+    --num_epochs 50 \
+    --num_pretraining_epochs 0 \
+    --num_devices 2 \
+    --dropout_rate 0.75 \
+    --save_path ../output \
+    --seed 53
 
 """

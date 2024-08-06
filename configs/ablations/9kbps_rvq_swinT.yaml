@@ -7,11 +7,11 @@ data:
 
 model_name: rvq+swinT
 model:
+    backbone: transformer
     in_dim: 2
     in_freq: 192
     h_dims: [45,72,96,144,192,384]
     max_streams: 6
-    backbone: swinT
     patch_size: [3,2]
     swin_heads: [3,6,12,24,24]
     swin_depth: 2

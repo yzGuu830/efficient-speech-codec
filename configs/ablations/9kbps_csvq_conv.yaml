@@ -7,9 +7,10 @@ data:
 
 model_name: csvq+conv
 model:
+    backbone: convolution
     in_dim: 2
     in_freq: 192
-    h_dims: [45,72,96,144,192,384] #[16,16,24,24,32,64]
+    h_dims: [45,72,96,144,192,384]
     max_streams: 6
     kernel_size: [5,2]
     patch_size: [3,2]
@@ -17,9 +18,8 @@ model:
     overlap: 2
     group_size: 3
     codebook_size: 1024
-    codebook_dim: 8
+    codebook_dim: [8,8,8,8,8,8]
     l2norm: True
-    init_method: kaiming
     win_len: 20
     hop_len: 5
     sr: 16000
