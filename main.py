@@ -1,7 +1,7 @@
 import argparse
 
 from scripts.trainer_no_adv import main as train_no_adv
-from utils import read_yaml, dict2namespace
+from scripts.utils import read_yaml, dict2namespace
 
 def parse_args_config():
     parser = argparse.ArgumentParser()
