@@ -1,12 +1,12 @@
 from .metrics import EntropyCounter, PESQ, MelSpectrogramDistance, SISDR
-from .utils import read_yaml
+from .utils import read_yaml, EvalSet
 from esc.models import make_model
 
-from torch.utils.data import DataLoader, Dataset, default_collate
+from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 import numpy as np
 
-import torchaudio, glob, argparse, torch, json
+import argparse, torch, json
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -18,21 +18,6 @@ def parse_args():
 
     parser.add_argument("--device", type=str, default="cpu")
     return parser.parse_args()
-
-class EvalSet(Dataset):
-    def __init__(self, eval_folder_path) -> None:
-        super().__init__()
-        self.testset_files = glob.glob(f"{eval_folder_path}/*.wav")
-        if not self.testset_files:
-            self.testset_files = glob.glob(f"{eval_folder_path}/*/*.wav")
-        self.testset_files = self.testset_files[:180000]
-        
-    def __len__(self):
-        return len(self.testset_files)
-
-    def __getitem__(self, i):
-        x, _ = torchaudio.load(self.testset_files[i])
-        return x[0, :-80]
 
 @torch.no_grad()
 def eval_epoch(model, eval_loader:DataLoader, 

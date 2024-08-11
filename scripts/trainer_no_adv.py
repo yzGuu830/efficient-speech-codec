@@ -72,8 +72,7 @@ class Trainer:
         while True:
             for _, x in enumerate(self.train_dl):
 
-                if self.pbar.n == self.args.pretraining_steps+1:
-                    # renew optimizer
+                if self.args.pretraining_steps > 0 and self.pbar.n == self.args.pretraining_steps+1:
                     optimizer = make_optimizer(self.accel.unwrap_model(self.model).parameters(), self.args.lr)
                     self.optimizer = self.accel.prepare(optimizer)
                     self.accel.print("Optimizer Renewed")

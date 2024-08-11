@@ -1,12 +1,12 @@
-import torch
+import torch, torchaudio
 import transformers
 import numpy as np
-import argparse, yaml
+import argparse, yaml, glob
 from huggingface_hub import hf_hub_download
-from torch.utils.data import DataLoader, default_collate
+from torch.utils.data import Dataset, DataLoader, default_collate
 
 from esc.modules import ComplexSTFTLoss, MelSpectrogramLoss
-from .test import EvalSet as AudioDataset
+
 
 def quantization_dropout(dropout_rate: float, max_streams: int):
     """
@@ -24,8 +24,23 @@ def quantization_dropout(dropout_rate: float, max_streams: int):
         streams = max_streams
     return streams
 
+class EvalSet(Dataset):
+    def __init__(self, eval_folder_path) -> None:
+        super().__init__()
+        self.testset_files = glob.glob(f"{eval_folder_path}/*.wav")
+        if not self.testset_files:
+            self.testset_files = glob.glob(f"{eval_folder_path}/*/*.wav")
+        self.testset_files = self.testset_files[:180000]
+        
+    def __len__(self):
+        return len(self.testset_files)
+
+    def __getitem__(self, i):
+        x, _ = torchaudio.load(self.testset_files[i])
+        return x[0, :-80]
+    
 def make_dataloader(data_path, batch_size, shuffle, num_workers=0):
-    ds = AudioDataset(data_path)
+    ds = EvalSet(data_path)
     dl = DataLoader(ds, batch_size=batch_size, shuffle=shuffle, 
                     collate_fn=default_collate, num_workers=num_workers)
     return dl
