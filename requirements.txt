@@ -1,8 +1,9 @@
-einops
-pesq
-timm
+torch
+torchaudio
 transformers
 accelerate
+timm
 wandb
-torchaudio
-torch
+einops
+pesq
+git+https://github.com/descriptinc/audiotools

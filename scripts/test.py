@@ -51,6 +51,7 @@ def eval_epoch(model, eval_loader:DataLoader,
             print(f"Test Metrics at {s*1.5:.2f}kbps: ", end="")
             print(" | ".join(f"{k}: {np.mean(v):.4f}" for k, v in perf.items()))
 
+    model.train()
     return all_perf
 
 def run(args):

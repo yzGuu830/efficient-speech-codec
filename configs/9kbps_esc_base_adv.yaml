@@ -5,6 +5,7 @@ data:
     train_bs_per_device: 9
     val_bs_per_device: 4
 
+model_name: csvq+swinT
 model:
     backbone: transformer
     in_dim: 2
@@ -22,7 +23,7 @@ model:
     overlap: 2
     group_size: 3
     codebook_size: 1024
-    codebook_dims: [32,32,16,12,8,6]
+    codebook_dims: [8,8,8,8,8,8]
     l2norm: True
 
 discriminator:
@@ -38,7 +39,9 @@ discriminator:
         - [0.75, 1.0]
 
 loss:
-    stft_weight: 1.0
+    stft_weight: 0.0
     cm_weight: .25
     cb_weight: 1.0
-    mel_weight: .25
+    mel_weight: 15.0
+    gen_weight: 1.0
+    feat_weight: 2.0

@@ -1,6 +1,7 @@
 import argparse
 
 from scripts.trainer_no_adv import main as train_no_adv
+from scripts.trainer_adv import main as train_adv
 from scripts.utils import read_yaml, dict2namespace
 
 def parse_args_config():
@@ -17,11 +18,12 @@ def parse_args_config():
     parser.add_argument("--val_metric", default="PESQ", type=str)
     parser.add_argument("--scheduler_type", default="constant", type=str)
     parser.add_argument("--dropout_rate", type=float, default=1.0)
+    parser.add_argument("--adv_training", default=False, action="store_true")
     parser.add_argument("--pretrain_ckp", type=str, default=None)
     
     parser.add_argument("--log_steps", default=5, type=int)
     parser.add_argument("--save_path", default="./output", type=str)
-    parser.add_argument("--config_path", default="./configs/9kbps_final.yaml")
+    parser.add_argument("--config_path", default="./configs/9kbps_esc_base.yaml")
     parser.add_argument("--seed", default=1234, type=int)
 
     args = parser.parse_args()    
@@ -31,100 +33,8 @@ def parse_args_config():
 
 if __name__ == "__main__":
     args, config = parse_args_config()
-    train_no_adv(args, config)
-
-
-"""
-# ESC-Base
-accelerate launch main.py \
-    --exp_name esc-base-9kbps \
-    --config_path ./configs/9kbps_esc_base.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 80 \
-    --num_pretraining_epochs 15 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-# ESC-Large
-accelerate launch main.py \
-    --exp_name esc-large-9kbps \
-    --config_path ./configs/9kbps_esc_large.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 80 \
-    --num_pretraining_epochs 15 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-
-# CS-RVQ + SwinT
-accelerate launch main.py \
-    --exp_name csvq_swinT_9kbps \
-    --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 5 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-# CS-RVQ + CNN 
-accelerate launch main.py \
-    --exp_name csvq_conv_9kbps \
-    --config_path ./configs/ablations/9kbps_csvq_conv.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 5 \
-    --num_devices 4 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-# RVQ + CNN 
-accelerate launch main.py \
-    --exp_name rvq_conv_9kbps \
-    --config_path ./configs/ablations/9kbps_rvq_conv.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 5 \
-    --num_devices 2 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-# RVQ + SwinT 
-accelerate launch main.py \
-    --exp_name rvq_swinT_9kbps \
-    --config_path ./configs/ablations/9kbps_rvq_swinT.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 5 \
-    --num_devices 2 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-# CS-RVQ + SwinT (w/o pre-training)
-accelerate launch main.py \
-    --exp_name csvq_swinT_9kbps_wo_pretraining \
-    --config_path ./configs/ablations/9kbps_csvq_swinT.yaml \
-    --wandb_project efficient-speech-codec \
-    --lr 1.0e-4 \
-    --num_epochs 50 \
-    --num_pretraining_epochs 0 \
-    --num_devices 2 \
-    --dropout_rate 0.75 \
-    --save_path ../output \
-    --seed 53
-
-"""
+    if args.adv_training:
+        train_adv(args, config)
+    else:
+        train_no_adv(args, config)
+        
