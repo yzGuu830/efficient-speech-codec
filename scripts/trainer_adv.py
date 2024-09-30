@@ -89,7 +89,7 @@ class TrainerAdv(Trainer):
         # Backward Pass (Generator)
         self.opt_g.zero_grad()
         self.accel.backward(outputs["loss"].mean())
-        self.accel.clip_grad_norm_(self.model.parameters(), 0.5)
+        self.accel.clip_grad_norm_(self.model.parameters(), 1e3)
         self.opt_g.step()
         self.scheduler.step()
 
@@ -101,7 +101,7 @@ class TrainerAdv(Trainer):
             # Backward Pass (Discriminator)
             self.opt_d.zero_grad()
             self.accel.backward(outputs["disc_loss"].mean())
-            self.accel.clip_grad_norm_(self.model_disc.parameters(), .05)
+            self.accel.clip_grad_norm_(self.model_disc.parameters(), 10.0)
             self.opt_d.step()
         else:
             outputs["disc_loss"] = torch.zeros(x.size(0), device=x.device)
@@ -130,7 +130,10 @@ class TrainerAdv(Trainer):
         self.model, self.model_disc, self.opt_g, self.opt_d, self.scheduler = self.accel.prepare(g, d, opt_g, opt_d, scheduler) 
         self.loss_funcs["adv_loss"] = GANLoss(self.model_disc).to(self.accel.device)
 
-        if self.pretrain_ckp is not None: self.evaluate() # pre-eval epoch        
+        if self.args.pretrain_ckp is not None and if self.accel.is_main_process: 
+            self.evaluate() # pre-eval epoch 
+        self.accel.wait_for_everyone()       
+        
         while True:
             for _, x in enumerate(self.train_dl):
 
