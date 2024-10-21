@@ -2,7 +2,7 @@
 
 This is the code repository for the neural speech codec presented in the EMNLP 2024 paper **ESC: Efficient Speech Coding with Cross-Scale Residual Vector Quantized Transformers** [[paper](https://arxiv.org/abs/2404.19441)]
 - Our neural speech codec ESC, within only 30MB, efficiently compresses 16kHz speech at bitrates of 1.5, 3, 4.5, 6, 7.5, and 9kbps, while maintaining comparative reconstruction quality to Descript's audio codec. 
-- We provide pretrained model checkpoints [[download](#model-checkpoints)] for different ESC variants and DAC models, as well as a demo page [[link](https://western-spatula-93a.notion.site/Efficient-Speech-Codec-0e513f33cf104f799e16bcad015b03ef?pvs=4)] including multilingual speech samples. 
+- We provide pretrained model checkpoints [[download](#model-checkpoints)] for different ESC variants and DAC models, as well as a demo webpage [[link](https://efficient-speech-codec.notion.site/)] including multilingual speech samples. 
 
 ![An illustration of ESC Architecture](assets/architecture.png)
 ## Usage
