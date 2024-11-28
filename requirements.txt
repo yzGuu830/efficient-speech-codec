@@ -1,9 +1,9 @@
-torch
-torchaudio
-transformers
-accelerate
-timm
-wandb
-einops
-pesq
+torch>2.0.0
+torchaudio>2.0.0
+transformers==4.36.2
+accelerate==0.26.1
+timm==0.9.12
+wandb==0.16.2
+einops==0.7.0
+pesq==0.0.4
 git+https://github.com/descriptinc/audiotools
