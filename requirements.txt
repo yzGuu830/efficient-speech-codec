@@ -1,6 +1,6 @@
 torch>2.0.0
 torchaudio>2.0.0
-transformers==4.36.2
+transformers==4.48.0
 accelerate==0.26.1
 timm==0.9.12
 wandb==0.16.2
