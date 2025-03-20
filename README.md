@@ -45,7 +45,7 @@ accelerate launch main.py --exp_name esc9kbps --config_path ./configs/9kbps_esc_
 
 We use `accelerate` library to handle distributed training and `wandb` library for monitoring. To enable adversarial training with the same discriminator in DAC, include the `--adv_training` flag. 
 
-Training a base ESC model on 4 RTX4090 GPUs takes ~12 hours for 250k steps on 3-second speech clips with a batch size of 36. Detailed experiment configurations can be found in the `configs/` folder. For complete experiments presented in the paper, refer to `scripts_all.sh`.  
+Training a base ESC model on 4 RTX4090 GPUs takes ~16 hours for 250k steps on 3-second speech clips with a batch size of 36. Detailed experiment configurations can be found in the `configs/` folder. For complete experiments presented in the paper, refer to `scripts_all.sh`.  
 
 ### Evaluation
 
