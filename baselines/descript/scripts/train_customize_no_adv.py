@@ -350,7 +350,7 @@ def train_dns(
     args: argparse.Namespace=None
 ):
     if accel.local_rank == 0:
-        wandb.login(key="880cb5a13d061af184bd6f3833bbce3df6d099fc")
+        wandb.login(key="********")
         wandb.init(project=args.wb_project_name, name=args.wb_exp_name)
 
     util.seed(seed)
