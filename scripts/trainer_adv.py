@@ -130,7 +130,7 @@ class TrainerAdv(Trainer):
         self.model, self.model_disc, self.opt_g, self.opt_d, self.scheduler = self.accel.prepare(g, d, opt_g, opt_d, scheduler) 
         self.loss_funcs["adv_loss"] = GANLoss(self.model_disc).to(self.accel.device)
 
-        if self.args.pretrain_ckp is not None and if self.accel.is_main_process: 
+        if self.args.pretrain_ckp is not None and self.accel.is_main_process: 
             self.evaluate() # pre-eval epoch 
         self.accel.wait_for_everyone()       
         
